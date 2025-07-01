@@ -13,5 +13,6 @@ router.post('/leave', managerController.applyLeave);
 router.get('/employees', managerController.getEmployees);
 router.get('/interns', managerController.getInterns);
 router.post('/project', managerController.createProject);
+router.get('/team-progress', managerController.getTeamProgress);
 
 module.exports = router;

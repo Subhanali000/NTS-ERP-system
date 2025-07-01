@@ -1,9 +1,10 @@
+
 const supabase = require('../config/supabase');
 
 exports.viewTeamPerformance = async (req, res) => {
   const { data, error } = await supabase
-    .from('users')
-    .select('*, tasks(*), attendance(*), leave_requests(*)')
+    .from('employees')
+    .select('*, tasks(*), attendance(*), leaves(*), progress(*)')
     .eq('manager_id', req.user.id);
 
   if (error) return res.status(400).json({ error: error.message });
@@ -12,12 +13,25 @@ exports.viewTeamPerformance = async (req, res) => {
 };
 
 exports.assignTask = async (req, res) => {
-  const { project_id, task_name, assigned_to } = req.body;
+  const { project_id, title, description, assignee, priority, due_date } = req.body;
+
+  // Validate assignee is under this manager
+  const { data: employee, error: employeeError } = await supabase
+    .from('employees')
+    .select('id, manager_id')
+    .eq('id', assignee)
+    .single();
+  if (employeeError || !employee || employee.manager_id !== req.user.id) {
+    return res.status(403).json({ error: 'Invalid assignee or not under this manager' });
+  }
 
   const { error } = await supabase.from('tasks').insert({
     project_id,
-    task_name,
-    assigned_to,
+    user_id: assignee,
+    title,
+    description,
+    priority,
+    due_date,
     assigned_by: req.user.id,
     status: 'assigned',
     progress: 0,
@@ -33,7 +47,7 @@ exports.approveLeave = async (req, res) => {
 
   // Verify the leave request belongs to the manager's team
   const { data: leaveData, error: leaveError } = await supabase
-    .from('leave_requests')
+    .from('leaves')
     .select('user_id')
     .eq('id', leave_id)
     .single();
@@ -41,7 +55,7 @@ exports.approveLeave = async (req, res) => {
   if (leaveError) return res.status(400).json({ error: leaveError.message });
 
   const { data: userData, error: userError } = await supabase
-    .from('users')
+    .from('employees')
     .select('manager_id')
     .eq('id', leaveData.user_id)
     .single();
@@ -51,7 +65,7 @@ exports.approveLeave = async (req, res) => {
   }
 
   const { error } = await supabase
-    .from('leave_requests')
+    .from('leaves')
     .update({ manager_approval: status })
     .eq('id', leave_id);
 
@@ -61,10 +75,11 @@ exports.approveLeave = async (req, res) => {
 };
 
 exports.applyLeave = async (req, res) => {
-  const { start_date, end_date, reason } = req.body;
+  const { leave_type, start_date, end_date, reason } = req.body;
 
-  const { error } = await supabase.from('leave_requests').insert({
+  const { error } = await supabase.from('leaves').insert({
     user_id: req.user.id,
+    leave_type,
     start_date,
     end_date,
     reason,
@@ -79,7 +94,7 @@ exports.applyLeave = async (req, res) => {
 
 exports.getEmployees = async (req, res) => {
   const { data, error } = await supabase
-    .from('users')
+    .from('employees')
     .select('*')
     .eq('manager_id', req.user.id)
     .eq('role', 'employee');
@@ -91,7 +106,7 @@ exports.getEmployees = async (req, res) => {
 
 exports.getInterns = async (req, res) => {
   const { data, error } = await supabase
-    .from('users')
+    .from('employees')
     .select('*')
     .eq('manager_id', req.user.id)
     .eq('role', 'intern');
@@ -102,15 +117,26 @@ exports.getInterns = async (req, res) => {
 };
 
 exports.createProject = async (req, res) => {
-  const { name, description } = req.body;
+  const { title, description } = req.body;
 
   const { data, error } = await supabase.from('projects').insert({
-    name,
+    title,
     description,
-    created_by: req.user.id,
+    director_id: (await supabase.from('employees').select('director_id').eq('id', req.user.id).single()).data.director_id,
   });
 
   if (error) return res.status(400).json({ error: error.message });
 
   res.status(201).json({ message: 'Project created successfully', project: data[0] });
+};
+
+exports.getTeamProgress = async (req, res) => {
+  const { data, error } = await supabase
+    .from('progress')
+    .select('*')
+    .eq('user_id', supabase.from('employees').select('id').eq('manager_id', req.user.id));
+
+  if (error) return res.status(400).json({ error: error.message });
+
+  res.status(200).json(data);
 };
