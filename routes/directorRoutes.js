@@ -4,7 +4,11 @@ const directorController = require('../controllers/directorController');
 const authMiddleware = require('../middleware/authMiddleware');
 
 router.use(authMiddleware.verifyToken);
-router.use(authMiddleware.restrictTo('director'));
+router.use(authMiddleware.restrictTo('Global HR Director',
+    'Global Operations Director',
+    'Engineering Director',
+    'Director – Tech Team',
+    'Director – Business Development'));
 
 router.post('/add-employee', directorController.addEmployee);
 router.post('/create-project', directorController.createProject);
@@ -21,5 +25,8 @@ router.get('/managers', directorController.getAllManagers);
 router.delete('/users/:user_id', directorController.deleteUser);
 router.patch('/users/:user_id', directorController.updateUser);
 router.get('/team-progress', directorController.getTeamProgress);
+router.get('/tasks', directorController.getAllTasks); // New route
+router.get('/progress-reports', directorController.getProgressReports); // New route
+router.get('/attendance', directorController.getAttendance); // New route
 
 module.exports = router;

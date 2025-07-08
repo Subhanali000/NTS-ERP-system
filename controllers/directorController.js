@@ -2,8 +2,6 @@
 const supabase = require('../config/supabase');
 
 exports.addEmployee = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can add employees' });
-
   const {
     email, name, phone, address, emergency_contact_name, emergency_contact_phone,
     employee_id, position, role, department, manager_id, join_date, annual_salary,
@@ -22,12 +20,21 @@ exports.addEmployee = async (req, res) => {
   if (!validDepartments.includes(department)) return res.status(400).json({ error: 'Invalid department' });
 
   if (manager_id) {
+    console.log('Validating manager_id:', manager_id); // Debug log
     const { data: manager, error: managerError } = await supabase
       .from('employees')
       .select('id, role, director_id')
       .eq('id', manager_id)
       .single();
-    if (managerError || !manager || manager.role !== 'manager' || manager.director_id !== req.user.id) {
+    if (managerError) {
+      console.error('Manager fetch error:', managerError.message);
+      return res.status(400).json({ error: 'Invalid manager ID' });
+    }
+    if (!manager) {
+      return res.status(400).json({ error: 'Manager not found' });
+    }
+    const managerRoles = ['talent_acquisition_manager', 'project_tech_manager', 'quality_assurance_manager', 'software_development_manager', 'systems_integration_manager', 'client_relations_manager'];
+    if (!managerRoles.includes(manager.role) || manager.director_id !== req.user.id) {
       return res.status(400).json({ error: 'Invalid manager ID or manager not under this director' });
     }
   }
@@ -83,7 +90,7 @@ exports.addEmployee = async (req, res) => {
 };
 
 exports.createProject = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can create projects' });
+
 
   const { title, description, start_date, end_date } = req.body;
 
@@ -102,7 +109,7 @@ exports.createProject = async (req, res) => {
 };
 
 exports.assignEmployee = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can assign employees to projects' });
+
 
   const { employee_id, project_id } = req.body;
 
@@ -135,7 +142,7 @@ exports.assignEmployee = async (req, res) => {
 };
 
 exports.approveLeave = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can approve manager leave' });
+
 
   const { leave_id, status } = req.body;
   const { data: leave, error: leaveError } = await supabase
@@ -158,7 +165,7 @@ exports.approveLeave = async (req, res) => {
 };
 
 exports.viewDivisionData = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view division data' });
+
 
   const { data, error } = await supabase
     .from('employees')
@@ -170,7 +177,7 @@ exports.viewDivisionData = async (req, res) => {
 };
 
 exports.getTotalEmployees = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view total employees' });
+
 
   const { data: director, error } = await supabase
     .from('directors')
@@ -183,7 +190,7 @@ exports.getTotalEmployees = async (req, res) => {
 };
 
 exports.getActiveProjects = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view active projects' });
+
 
   const { data, error } = await supabase
     .from('projects')
@@ -196,7 +203,7 @@ exports.getActiveProjects = async (req, res) => {
 };
 
 exports.getDepartments = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view departments' });
+
 
   const { data, error } = await supabase
     .from('employees')
@@ -209,7 +216,7 @@ exports.getDepartments = async (req, res) => {
 };
 
 exports.getAvgPerformance = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view average performance' });
+
 
   const { data, error } = await supabase
     .from('tasks')
@@ -224,7 +231,7 @@ exports.getAvgPerformance = async (req, res) => {
 };
 
 exports.getAllEmployees = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view employees' });
+
 
   const { data, error } = await supabase
     .from('employees')
@@ -237,7 +244,7 @@ exports.getAllEmployees = async (req, res) => {
 };
 
 exports.getAllInterns = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view interns' });
+
 
   const { data, error } = await supabase
     .from('employees')
@@ -250,20 +257,68 @@ exports.getAllInterns = async (req, res) => {
 };
 
 exports.getAllManagers = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view managers' });
+  try {
+    // Debug log for user role
+    console.log('User role in getAllManagers:', req.user?.role);
 
-  const { data, error } = await supabase
-    .from('employees')
-    .select('id, email, name, role, department, employee_id, manager_title')
-    .eq('director_id', req.user.id)
-    .in('role', ['manager', 'talent_acquisition_manager', 'project_tech_manager', 'quality_assurance_manager', 'software_development_manager', 'systems_integration_manager', 'client_relations_manager']);
+    // Validate req.user and role
+    if (!req.user || !req.user.id || !req.user.role) {
+      return res.status(401).json({ error: 'Authentication required or invalid user data' });
+    }
 
-  if (error) return res.status(400).json({ error: error.message });
-  res.json(data);
+    const isDirector = [
+      'Global HR Director',
+      'Global Operations Director',
+      'Engineering Director',
+      'Director – Tech Team',
+      'Director – Business Development'
+    ].includes(req.user.role);
+    if (!isDirector) {
+      return res.status(403).json({ error: 'Only directors can view managers' });
+    }
+
+    // Define manager roles
+    const managerRoles = [
+      'talent_acquisition_manager',
+      'project_tech_manager',
+      'quality_assurance_manager',
+      'software_development_manager',
+      'systems_integration_manager',
+      'client_relations_manager'
+    ];
+
+    // Fetch managers with additional filters (e.g., active status)
+    const { data, error } = await supabase
+      .from('employees')
+      .select('id, name, role, department')
+      .eq('director_id', req.user.id)
+      .in('role', managerRoles)
+      .order('name', { ascending: true }); // Optional: Sort by name for better UX
+
+    // Check for database errors
+    if (error) {
+      console.error('Database error in getAllManagers:', error.message);
+      throw new Error('Failed to fetch managers from database');
+    }
+
+    // Check if no managers found
+    if (!data || data.length === 0) {
+      console.log('No managers found for director:', req.user.id);
+      return res.status(200).json([]); // Return empty array instead of error
+    }
+
+    // Return successful response
+    res.status(200).json(data);
+  } catch (error) {
+    // Enhanced error handling
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    console.error('Error in getAllManagers:', errorMessage);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 };
 
 exports.deleteUser = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can delete users' });
+
 
   const { user_id } = req.params;
   const { data: user, error: userError } = await supabase
@@ -302,7 +357,7 @@ exports.deleteUser = async (req, res) => {
 };
 
 exports.updateUser = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can update users' });
+
 
   const { user_id } = req.params;
   const {
@@ -372,7 +427,7 @@ exports.generateDocument = async (req, res) => {
 };
 
 exports.getTeamProgress = async (req, res) => {
-  if (req.user.role !== 'director') return res.status(403).json({ error: 'Only directors can view team progress' });
+
 
   const { data, error } = await supabase
     .from('progress')
@@ -382,4 +437,55 @@ exports.getTeamProgress = async (req, res) => {
   if (error) return res.status(400).json({ error: error.message });
 
   res.status(200).json(data);
+};
+exports.getAllTasks = async (req, res) => {
+ 
+
+  const { data: employeeIds, error: employeeError } = await supabase
+    .from('employees')
+    .select('id')
+    .eq('director_id', req.user.id);
+
+  if (employeeError) return res.status(400).json({ error: employeeError.message });
+
+  const employeeIdList = employeeIds.map(emp => emp.id);
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .in('user_id', employeeIdList);
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+};
+
+exports.getProgressReports = async (req, res) => {
+
+
+  const { data: employeeIds, error: employeeError } = await supabase
+    .from('employees')
+    .select('id')
+    .eq('director_id', req.user.id);
+
+  if (employeeError) return res.status(400).json({ error: employeeError.message });
+
+  const employeeIdList = employeeIds.map(emp => emp.id);
+  const { data, error } = await supabase
+    .from('progress')
+    .select('*')
+    .in('user_id', employeeIdList);
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
+};
+
+exports.getAttendance = async (req, res) => {
+
+
+  const { data, error } = await supabase
+    .from('attendance')
+    .select('*')
+
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data);
 };
