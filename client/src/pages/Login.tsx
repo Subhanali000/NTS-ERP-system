@@ -1,7 +1,7 @@
-
 import React, { useState } from 'react';
 import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+
 
 interface LoginProps {
   onLogin: () => void;
@@ -12,63 +12,97 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false); // Optional: not yet used
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const isFormValid = email.trim() && password.trim();
+const handleSubmit = async (e: React.FormEvent) => {
+  e.preventDefault();
+  if (!isFormValid) return;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isFormValid) return;
+  setIsLoading(true);
+  setError('');
 
-    setIsLoading(true);
-    setError('');
+  try {
+    // Step 1: Send login request
+    const response = await fetch('http://localhost:8000/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
 
-    try {
-      const response = await fetch('http://localhost:8000/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await response.json();
-
-      setIsLoading(false);
-
-      if (response.ok) {
-        console.log('Login response:', data); // Debug log
-        if (data.token) {
-          localStorage.setItem('token', data.token);
-          // Normalize role to match role_type enum
-          const rawRole = data.role || 'employee';
-          const normalizedRole = rawRole.toLowerCase().replace(/ /g, '_');
-          localStorage.setItem('role', normalizedRole); // Store normalized role
-          onLogin();
-
-          // Redirect based on normalized role
-          if (['global_hr_director', 'global_operations_director', 'engineering_director', 'director_tech_team', 'director_business_development'].includes(normalizedRole)) {
-            navigate('/dashboard/director');
-          } else if (['talent_acquisition_manager', 'project_tech_manager', 'quality_assurance_manager', 'software_development_manager', 'systems_integration_manager', 'client_relations_manager'].includes(normalizedRole)) {
-            navigate('/dashboard/manager');
-          } else if (normalizedRole === 'team_lead') {
-            navigate('/dashboard/team-lead');
-          } else if (['employee', 'intern'].includes(normalizedRole)) {
-            navigate('/dashboard/employee');
-          } else {
-            navigate('/');
-          }
-        } else {
-          throw new Error('Token not found in response');
-        }
-      } else {
-        setError(data.error || 'Login failed. Please try again.');
-      }
-    } catch (err: any) {
-      setIsLoading(false);
-      setError(err.message || 'An error occurred. Please check your network and try again.');
+    const data = await response.json();
+    if (!response.ok || !data.token) {
+      throw new Error(data.error || 'Login failed. Please try again.');
     }
-  };
+
+    // Step 2: Save token
+    localStorage.setItem('token', data.token);
+
+    // Step 3: Fetch user profile
+    const profileResponse = await fetch('http://localhost:8000/api/user/profile', {
+      headers: {
+        Authorization: `Bearer ${data.token}`,
+      },
+    });
+
+    if (!profileResponse.ok) {
+      throw new Error('Failed to fetch user profile.');
+    }
+
+    const profile = await profileResponse.json();
+
+    // Step 4: Normalize and store role
+    const rawRole = profile.role || 'employee';
+    const normalizedRole = rawRole.toLowerCase().replace(/\s+/g, '_');
+    localStorage.setItem('userRole', normalizedRole);
+    localStorage.setItem('currentUser', JSON.stringify(profile));
+
+    console.log('🧾 Raw role:', rawRole);
+    console.log('✅ Normalized role:', normalizedRole);
+    console.log('🙋‍♂️ User profile:', profile);
+
+    // Step 5: Call onLogin
+    onLogin();
+
+    // Step 6: Redirect by role
+    const directorRoles = [
+      'global_hr_director',
+      'global_operations_director',
+      'engineering_director',
+      'director_tech_team',
+      'director_business_development',
+    ];
+
+    const managerRoles = [
+      'talent_acquisition_manager',
+      'project_tech_manager',
+      'quality_assurance_manager',
+      'software_development_manager',
+      'systems_integration_manager',
+      'client_relations_manager',
+    ];
+
+    if (directorRoles.includes(normalizedRole)) {
+      navigate('/dashboard/director');
+    } else if (managerRoles.includes(normalizedRole)) {
+      navigate('/dashboard/manager');
+    } else if (normalizedRole === 'team_lead') {
+      navigate('/dashboard/team-lead');
+    } else if (['employee', 'intern'].includes(normalizedRole)) {
+      navigate('/dashboard/employee');
+    } else {
+      navigate('/');
+    }
+
+  } catch (err: any) {
+    setError(err.message || 'An unexpected error occurred.');
+  } finally {
+    setIsLoading(false);
+  }
+};
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100 flex items-center justify-center p-4">

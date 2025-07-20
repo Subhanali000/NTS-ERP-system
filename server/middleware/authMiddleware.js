@@ -1,36 +1,61 @@
+// middleware/authMiddleware.js
 
 const jwt = require('jsonwebtoken');
-const supabase = require('../config/supabase');
+const { supabase } = require('../config/supabase');
 
-exports.verifyToken = async (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) return res.status(401).json({ error: 'No token provided' });
-
+const verifyToken = async (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer '))
+      return res.status(401).json({ error: 'Authorization token missing or malformed' });
 
-    // Fetch role from the appropriate table based on user type
-    let userQuery;
-    userQuery = await supabase.from('directors').select('role').eq('id', decoded.id).single();
-    if (userQuery.error && userQuery.error.code === 'PGRST116') { // Row not found
-      userQuery = await supabase.from('employees').select('role').eq('id', decoded.id).single();
+    const token = authHeader.split(' ')[1];
+    const secret = process.env.JWT_SECRET || 'default-secret';
+    const decoded = jwt.verify(token, secret);
+
+    const { data: director } = await supabase
+      .from('directors')
+      .select('id, role')
+      .eq('id', decoded.id)
+      .single();
+
+    let user = director;
+
+    if (!user) {
+      const { data: employee } = await supabase
+        .from('employees')
+        .select('id, role')
+        .eq('id', decoded.id)
+        .single();
+      user = employee;
     }
-    if (userQuery.error) return res.status(401).json({ error: 'Invalid user' });
 
-    req.user.role = userQuery.data.role; // Update role from database
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    req.user = {
+      id: decoded.id,
+      role: user.role,
+    };
+
     next();
   } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
+    return res.status(401).json({ error: 'Invalid or expired token' });
   }
 };
 
-exports.restrictTo = (...roles) => {
+const restrictTo = (...roles) => {
   return (req, res, next) => {
     if (!req.user || !roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     next();
   };
+};
+
+// ✅ Export both functions
+module.exports = {
+  verifyToken,
+  restrictTo,
 };

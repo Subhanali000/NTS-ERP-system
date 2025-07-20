@@ -1,4 +1,5 @@
-const supabase = require('../config/supabase');
+const { supabase } = require('../config/supabase');
+
 
 exports.addEmployee = async (req, res) => {
   const {

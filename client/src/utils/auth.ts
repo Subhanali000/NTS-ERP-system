@@ -6,23 +6,19 @@ let currentUser: User | null = null;
 
 export const getCurrentUser = (): User => {
   if (currentUser) return currentUser;
-  
-  // Try to get user from localStorage
+
   const storedUser = localStorage.getItem('currentUser');
   if (storedUser) {
     currentUser = JSON.parse(storedUser);
     return currentUser!;
   }
-  
-  // Fallback to first user if no stored user (shouldn't happen in normal flow)
+
   return mockUsers[0];
 };
 
 export const setCurrentUser = (user: User): void => {
   currentUser = user;
   localStorage.setItem('currentUser', JSON.stringify(user));
-  
-  // Trigger a custom event to notify components of user update
   window.dispatchEvent(new CustomEvent('userUpdated', { detail: user }));
 };
 
@@ -31,107 +27,62 @@ export const clearCurrentUser = (): void => {
   localStorage.removeItem('currentUser');
 };
 
-// Updated authentication function that finds user by email only
 export const authenticateUserByEmail = (email: string, password: string): User | null => {
-  // Find user by email (password validation would be done by backend in real implementation)
-  const user = mockUsers.find(u => 
-    u.email.toLowerCase() === email.toLowerCase()
-  );
-  
-  if (user && password === 'password123') { // Demo password validation
+  const user = mockUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
+  if (user && password === 'password123') {
     setCurrentUser(user);
     return user;
   }
-  
   return null;
 };
 
-// Legacy function for backward compatibility
 export const authenticateUser = (email: string, role: UserRole): User | null => {
-  const user = mockUsers.find(u => 
-    u.email.toLowerCase() === email.toLowerCase() && u.role === role
-  );
-  
+  const user = mockUsers.find(u => u.email.toLowerCase() === email.toLowerCase() && u.role === role);
   if (user) {
     setCurrentUser(user);
     return user;
   }
-  
   return null;
 };
 
-export const isDirector = (role: UserRole): boolean => {
-  return [
-    'global_hr_director',
-    'global_operations_director',
-    'engineering_director',
-    'director_tech_team',
-    'director_business_development'
-  ].includes(role);
-};
+export const isDirector = (role: UserRole): boolean => [
+  'global_hr_director',
+  'global_operations_director',
+  'engineering_director',
+  'director_tech_team',
+  'director_business_development'
+].includes(role);
 
-export const isManager = (role: UserRole): boolean => {
-  return [
-    'talent_acquisition_manager',
-    'project_tech_manager',
-    'quality_assurance_manager',
-    'software_development_manager',
-    'systems_integration_manager',
-    'client_relations_manager'
-  ].includes(role);
-};
+export const isManager = (role: UserRole): boolean => [
+  'talent_acquisition_manager',
+  'project_tech_manager',
+  'quality_assurance_manager',
+  'software_development_manager',
+  'systems_integration_manager',
+  'client_relations_manager'
+].includes(role);
 
-export const isTeamLead = (role: UserRole): boolean => {
-  return role === 'team_lead';
-};
-
-export const isEmployee = (role: UserRole): boolean => {
-  return role === 'employee';
-};
-
-export const isIntern = (role: UserRole): boolean => {
-  return role === 'intern';
-};
+export const isTeamLead = (role: UserRole): boolean => role === 'team_lead';
+export const isEmployee = (role: UserRole): boolean => role === 'employee';
+export const isIntern = (role: UserRole): boolean => role === 'intern';
 
 export const canApproveLeave = (user: User, requesterId: string): boolean => {
   const requester = mockUsers.find(u => u.id === requesterId);
   if (!requester) return false;
-
-  // Directors can approve leave for their managers
-  if (isDirector(user.role)) {
-    return requester.managerId === user.id;
-  }
-
-  // Managers can approve leave for their direct reports
-  if (isManager(user.role)) {
-    return requester.managerId === user.id;
-  }
-
-  // Team leads can approve leave for their team members
-  if (isTeamLead(user.role)) {
-    return requester.managerId === user.id;
-  }
-
-  return false;
+  return requester.managerId === user.id && (
+    isDirector(user.role) || isManager(user.role) || isTeamLead(user.role)
+  );
 };
 
 export const getApprovalChain = (userId: string): string[] => {
   const user = mockUsers.find(u => u.id === userId);
   if (!user) return [];
-
   const chain: string[] = [];
-
-  // Add immediate manager
   if (user.managerId) {
     chain.push(user.managerId);
-    
-    // Add director if user is managed by a manager
     const manager = mockUsers.find(u => u.id === user.managerId);
-    if (manager && manager.managerId) {
-      chain.push(manager.managerId);
-    }
+    if (manager?.managerId) chain.push(manager.managerId);
   }
-
   return chain;
 };
 
@@ -152,10 +103,30 @@ export const getRoleDisplayName = (role: UserRole): string => {
     'employee': 'Employee',
     'intern': 'Intern'
   };
-
   return roleMap[role] || role;
 };
+// utils/auth.ts
 
+export const saveAuthData = (
+  token: string,
+  role: string,
+  email: string,
+  id?: string | null
+) => {
+  const normalizedRole = role.toLowerCase().replace(/ /g, '_');
+
+  localStorage.setItem('token', token);
+  localStorage.setItem('role', normalizedRole);
+  localStorage.setItem(
+    'currentUser',
+    JSON.stringify({ email, role: normalizedRole, id: id || null })
+  );
+  localStorage.setItem('isAuthenticated', 'true');
+};
+
+export const isAuthenticated = (): boolean => {
+  return localStorage.getItem('isAuthenticated') === 'true';
+}
 export const getSimpleDesignation = (role: UserRole): string => {
   if (isDirector(role)) return 'Director';
   if (isManager(role)) return 'Manager';
@@ -176,11 +147,9 @@ export const getDepartmentColor = (department: string): string => {
     'systems_integration': 'bg-indigo-500',
     'client_relations': 'bg-red-500'
   };
-
   return colorMap[department] || 'bg-gray-500';
 };
 
-// Get sample users for each role type for login
 export const getSampleUsersByRole = () => {
   const directors = mockUsers.filter(u => isDirector(u.role));
   const managers = mockUsers.filter(u => isManager(u.role));
@@ -195,7 +164,6 @@ export const getSampleUsersByRole = () => {
   };
 };
 
-// User preferences management
 export const getUserPreferences = () => {
   const preferences = localStorage.getItem('userPreferences');
   return preferences ? JSON.parse(preferences) : {
@@ -219,19 +187,14 @@ export const getUserPreferences = () => {
 
 export const setUserPreferences = (preferences: any) => {
   localStorage.setItem('userPreferences', JSON.stringify(preferences));
-  
-  // Apply theme immediately
   if (preferences.theme === 'dark') {
     document.documentElement.classList.add('dark');
   } else {
     document.documentElement.classList.remove('dark');
   }
-  
-  // Trigger preference update event
   window.dispatchEvent(new CustomEvent('preferencesUpdated', { detail: preferences }));
 };
 
-// Security settings management
 export const getSecuritySettings = () => {
   const settings = localStorage.getItem('securitySettings');
   return settings ? JSON.parse(settings) : {
@@ -244,4 +207,10 @@ export const getSecuritySettings = () => {
 
 export const setSecuritySettings = (settings: any) => {
   localStorage.setItem('securitySettings', JSON.stringify(settings));
+};
+
+// ✅ Added at the end (after dependencies are defined)
+export const getCurrentUserRoleDisplayName = (): string => {
+  const user = getCurrentUser();
+  return getRoleDisplayName(user.role);
 };

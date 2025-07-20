@@ -8,9 +8,29 @@ const managerRoutes = require('./routes/managerRoutes');
 const directorRoutes = require('./routes/directorRoutes');
 const jwt = require('jsonwebtoken');
 
-const supabase = require('./config/supabase');
+const { supabase } = require('./config/supabase'); // ✅ CORRECT
+
 
 const app = express();
+// Debug middleware: Log incoming requests and outgoing responses
+app.use((req, res, next) => {
+  console.log(`➡️ [${req.method}] ${req.originalUrl}`);
+
+  if (req.body && Object.keys(req.body).length) {
+    console.log('🟡 Body:', JSON.stringify(req.body, null, 2));
+  }
+
+  const oldSend = res.send;
+  res.send = function (data) {
+    console.log(`⬅️ [${res.statusCode}] Response to ${req.method} ${req.originalUrl}`);
+    console.log('🟢 Response Body:', data);
+    res.send = oldSend;
+    return res.send(data);
+  };
+
+  next();
+});
+
 
 app.use(cors());
 app.use(bodyParser.json());
@@ -26,7 +46,7 @@ const authenticateToken = (req, res, next) => {
     next();
   });
 };
-
+app.use('/api', authRoutes);
 // Common route to fetch user profile (role and name) from employees or directors table
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
   const userId = req.user.id;

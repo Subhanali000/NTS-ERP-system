@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
-import { User, Mail, Phone, Calendar, MapPin, Briefcase, Save, X, Camera, Edit3, Shield, Key, Bell, Globe, Palette, Monitor, Moon, Sun } from 'lucide-react';
-import { getCurrentUser, setCurrentUser } from '../../utils/auth';
-import { getRoleDisplayName } from '../../utils/auth';
+import React, { useState, useEffect } from 'react';
+import {
+  User, Mail, Phone, Calendar, MapPin, Briefcase, Save, X, Camera, Edit3,
+  Shield, Key, Bell, Globe, Palette, Monitor, Moon, Sun
+} from 'lucide-react';
+import { getCurrentUser, setCurrentUser, getRoleDisplayName } from '../../utils/auth';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -13,21 +15,19 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
   const [activeTab, setActiveTab] = useState<'profile' | 'settings' | 'security' | 'preferences'>('profile');
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-
-  // Profile form data
+   const departmentName = user.department ? user.department.replace('_', ' ') : 'Unknown';
   const [profileData, setProfileData] = useState({
     name: user.name,
     email: user.email,
-    phone: '(555) 123-4567',
-    address: '123 Main Street, City, State 12345',
-    bio: 'Dedicated professional with expertise in team management and project delivery.',
-    emergencyContact: 'Jane Doe',
-    emergencyPhone: '(555) 987-6543',
-    linkedin: 'https://linkedin.com/in/johndoe',
-    github: 'https://github.com/johndoe'
+    phone: '',
+    address: '',
+    bio: '',
+    emergencyContact: '',
+    emergencyPhone: '',
+    linkedin: '',
+    github: ''
   });
 
-  // Settings data
   const [settingsData, setSettingsData] = useState({
     theme: 'light',
     language: 'en',
@@ -46,7 +46,6 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
     animationsEnabled: true
   });
 
-  // Security data
   const [securityData, setSecurityData] = useState({
     currentPassword: '',
     newPassword: '',
@@ -57,44 +56,118 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
     deviceManagement: true
   });
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    const fetchAll = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      try {
+        // Fetch profile
+        const profileRes = await fetch('http://localhost:8000/api/user/profile', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!profileRes.ok) throw new Error('Failed to fetch profile');
+        const profile = await profileRes.json();
+
+        setProfileData(prev => ({
+          ...prev,
+          name: profile.name || '',
+          email: profile.email || '',
+          phone: profile.phone || '',
+          address: profile.address || '',
+          bio: profile.bio || '',
+          emergencyContact: profile.emergencyContact || '',
+          emergencyPhone: profile.emergencyPhone || '',
+          linkedin: profile.linkedin || '',
+          github: profile.github || ''
+        }));
+
+        // Fetch settings
+        const settingsRes = await fetch('http://localhost:8000/api/user/settings', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (settingsRes.ok) {
+          const settings = await settingsRes.json();
+          setSettingsData(settings);
+        }
+
+        // Fetch security settings
+        const securityRes = await fetch('http://localhost:8000/api/user/security', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (securityRes.ok) {
+          const security = await securityRes.json();
+          setSecurityData(prev => ({
+            ...prev,
+            twoFactorEnabled: security.twoFactorEnabled,
+            sessionTimeout: security.sessionTimeout,
+            loginAlerts: security.loginAlerts,
+            deviceManagement: security.deviceManagement
+          }));
+        }
+
+      } catch (err) {
+        console.error('Error loading user data:', err);
+      }
+    };
+
+    if (isOpen) {
+      fetchAll();
+    }
+  }, [isOpen]);
 
   const handleProfileSave = async () => {
     setIsSaving(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      // Update user data
-      const updatedUser = {
-        ...user,
-        name: profileData.name,
-        email: profileData.email
-      };
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:8000/api/user/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(profileData),
+      });
+
+      if (!res.ok) throw new Error('Failed to update profile');
+      const updatedUser = await res.json();
       setCurrentUser(updatedUser);
-      
-      setIsSaving(false);
       setIsEditing(false);
-      
-      // Show success message
-      console.log('Profile updated successfully');
-    }, 1500);
+      console.log('✅ Profile updated successfully');
+    } catch (err) {
+      console.error('❌ Error saving profile:', err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleSettingsSave = async () => {
     setIsSaving(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      // Apply theme changes
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:8000/api/user/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(settingsData),
+      });
+
+      if (!res.ok) throw new Error('Failed to update settings');
+
       if (settingsData.theme === 'dark') {
         document.documentElement.classList.add('dark');
       } else {
         document.documentElement.classList.remove('dark');
       }
-      
+
+      console.log('✅ Settings updated successfully');
+    } catch (err) {
+      console.error('❌ Error saving settings:', err);
+    } finally {
       setIsSaving(false);
-      console.log('Settings updated successfully');
-    }, 1000);
+    }
   };
 
   const handleSecuritySave = async () => {
@@ -102,21 +175,37 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
       alert('Passwords do not match');
       return;
     }
-    
+
     setIsSaving(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      setIsSaving(false);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:8000/api/user/security', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(securityData),
+      });
+
+      if (!res.ok) throw new Error('Failed to update security settings');
+
       setSecurityData(prev => ({
         ...prev,
         currentPassword: '',
         newPassword: '',
         confirmPassword: ''
       }));
-      console.log('Security settings updated successfully');
-    }, 1500);
+
+      console.log('✅ Security settings updated');
+    } catch (err) {
+      console.error('❌ Error saving security settings:', err);
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  if (!isOpen) return null;
 
   const ProfileTab = () => (
     <div className="space-y-8">
@@ -136,7 +225,10 @@ const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose }) => {
           <div className="flex-1">
             <h3 className="text-2xl font-bold text-gray-900">{user.name}</h3>
             <p className="text-lg text-gray-600">{getRoleDisplayName(user.role)}</p>
-            <p className="text-sm text-gray-500 capitalize">{user.department.replace('_', ' ')} Department</p>
+            <p className="text-sm text-gray-500 capitalize">
+  {departmentName} Department
+</p>
+
             <div className="mt-3 flex items-center space-x-4">
               <div className="flex items-center space-x-1 text-sm text-gray-600">
                 <Calendar className="w-4 h-4" />

@@ -1,11 +1,23 @@
-import React, { useState } from 'react';
-import { Send, Calendar, Clock, CheckCircle, FileText, Upload, X, Plus, TrendingUp, Target, Award, MessageSquare } from 'lucide-react';
-import { getCurrentUser } from '../utils/auth';
+import React, { useState, useEffect } from 'react';
+import {
+  Send,
+  Calendar,
+  Clock,
+  CheckCircle,
+  FileText,
+  Upload,
+  X,
+  MessageSquare,
+  Target,
+  TrendingUp,
+  Award
+} from 'lucide-react';
+
 import { formatDate, formatDateTime, getCurrentDate } from '../utils/dateUtils';
+
 
 interface DailyProgressEntry {
   id: string;
-  userId: string;
   date: string;
   content: string;
   attachments?: string[];
@@ -14,53 +26,48 @@ interface DailyProgressEntry {
   managerFeedback?: string;
 }
 
+
 const DailyProgress: React.FC = () => {
-  const user = getCurrentUser();
   const [progressContent, setProgressContent] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [progressHistory, setProgressHistory] = useState<DailyProgressEntry[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
-
-  // Mock data for previous submissions
-  const [progressHistory] = useState<DailyProgressEntry[]>([
-    {
-      id: '1',
-      userId: user.id,
-      date: '2024-02-12',
-      content: 'Completed the user authentication module implementation. Fixed 3 critical bugs in the login flow and added comprehensive unit tests. Started working on the password reset functionality. Attended team standup and code review session.',
-      submittedAt: '2024-02-12T17:30:00Z',
-      status: 'reviewed',
-      managerFeedback: 'Great progress on the authentication module! The bug fixes were crucial. Keep up the excellent work.'
-    },
-    {
-      id: '2',
-      userId: user.id,
-      date: '2024-02-11',
-      content: 'Worked on database optimization queries. Improved performance by 40% on user data retrieval. Collaborated with the backend team on API endpoint design. Reviewed pull requests from team members.',
-      submittedAt: '2024-02-11T18:15:00Z',
-      status: 'reviewed',
-      managerFeedback: 'Impressive performance improvements! Your collaboration with the backend team is valuable.'
-    },
-    {
-      id: '3',
-      userId: user.id,
-      date: '2024-02-10',
-      content: 'Focused on frontend component development. Created reusable UI components for the dashboard. Implemented responsive design for mobile devices. Participated in client requirements gathering meeting.',
-      submittedAt: '2024-02-10T16:45:00Z',
-      status: 'submitted'
-    }
-  ]);
-
-  const todayEntry = progressHistory.find(entry => entry.date === getCurrentDate());
+  const today = getCurrentDate();
+  const todayEntry = progressHistory.find((entry) => entry.date === today);
   const hasSubmittedToday = !!todayEntry;
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
-    setAttachments(prev => [...prev, ...files]);
+  useEffect(() => {
+    const fetchProgress = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch('http://localhost:8000/api/employee/daily-progress', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch progress history');
+        const data = await response.json();
+        setProgressHistory(data);
+      } catch (error) {
+        console.error('Error fetching progress:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProgress();
+  }, []);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    setAttachments((prev) => [...prev, ...files]);
   };
 
   const removeAttachment = (index: number) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index));
+    setAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -68,23 +75,36 @@ const DailyProgress: React.FC = () => {
     if (!progressContent.trim()) return;
 
     setIsSubmitting(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      console.log('Submitting daily progress:', {
-        content: progressContent,
-        attachments: attachments.map(f => f.name),
-        date: getCurrentDate(),
-        userId: user.id
+
+    try {
+      const formData = new FormData();
+      formData.append('content', progressContent);
+      formData.append('date', today);
+      attachments.forEach((file) => formData.append('attachments', file));
+
+      const token = localStorage.getItem('token');
+
+      const response = await fetch('http://localhost:8000/api/employee/daily-progress', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
       });
-      
+
+      if (!response.ok) throw new Error('Submission failed');
+
+      const newEntry = await response.json();
+      setProgressHistory((prev) => [newEntry, ...prev]);
       setProgressContent('');
       setAttachments([]);
+      alert('Progress submitted successfully!');
+    } catch (error) {
+      console.error('Error submitting progress:', error);
+      alert('Failed to submit progress.');
+    } finally {
       setIsSubmitting(false);
-      
-      // Show success message (in real app, this would update the history)
-      alert('Daily progress submitted successfully!');
-    }, 1500);
+    }
   };
 
   const getStatusColor = (status: string) => {
@@ -105,25 +125,29 @@ const DailyProgress: React.FC = () => {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-gray-500 text-lg">Loading...</p>
+      </div>
+    );
+  }
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-blue-900 to-purple-900 bg-clip-text text-transparent">
-            Daily Progress
-          </h1>
-          <p className="text-gray-600 mt-2 text-lg">Share your daily accomplishments and updates with your team</p>
-        </div>
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={() => setShowHistory(!showHistory)}
-            className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center space-x-2"
-          >
-            <Clock className="w-4 h-4" />
-            <span>View History</span>
-          </button>
-        </div>
+    <div>
+      <div>
+        <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-blue-900 to-purple-900 bg-clip-text text-transparent">
+          Daily Progress
+        </h1>
+        <p className="text-gray-600 mt-2 text-lg">Share your daily accomplishments and updates with your team</p>
+      </div>
+      <div className="flex items-center space-x-3">
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className="bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200 transition-colors flex items-center space-x-2"
+        >
+          <Clock className="w-4 h-4" />
+          <span>View History</span>
+        </button>
       </div>
 
       {/* Today's Status */}
@@ -243,7 +267,7 @@ const DailyProgress: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <button
                     type="button"
-                    onClick={() => setProgressContent(prev => prev + '\n\n📋 Tasks Completed:\n• \n\n🚧 Challenges Faced:\n• \n\n📅 Tomorrow\'s Plan:\n• ')}
+                    onClick={() => setProgressContent((prev: string) => prev + '\n\n📋 Tasks Completed:\n• \n\n🚧 Challenges Faced:\n• \n\n📅 Tomorrow\'s Plan:\n• ')}
                     className="p-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex items-center space-x-2 mb-1">
@@ -255,7 +279,7 @@ const DailyProgress: React.FC = () => {
                   
                   <button
                     type="button"
-                    onClick={() => setProgressContent(prev => prev + '\n\n🎯 Key Achievements:\n• \n\n🤝 Collaboration:\n• \n\n📈 Progress Made:\n• ')}
+                    onClick={() => setProgressContent((prev: string) => prev + '\n\n🎯 Key Achievements:\n• \n\n🤝 Collaboration:\n• \n\n📈 Progress Made:\n• ')}
                     className="p-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex items-center space-x-2 mb-1">
@@ -267,7 +291,7 @@ const DailyProgress: React.FC = () => {
                   
                   <button
                     type="button"
-                    onClick={() => setProgressContent(prev => prev + '\n\n📊 Project Updates:\n• \n\n🔧 Technical Work:\n• \n\n💡 Learnings:\n• ')}
+                    onClick={() => setProgressContent((prev: string) => prev + '\n\n📊 Project Updates:\n• \n\n🔧 Technical Work:\n• \n\n💡 Learnings:\n• ')}
                     className="p-3 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors text-left"
                   >
                     <div className="flex items-center space-x-2 mb-1">

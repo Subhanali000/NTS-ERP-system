@@ -1,101 +1,218 @@
-import React, { useState } from 'react';
-import { Calendar, Clock, CheckCircle, XCircle, Plus, Filter, User, Send, MessageSquare, AlertTriangle, FileText } from 'lucide-react';
-import { getCurrentUser, canApproveLeave, isDirector, isManager } from '../utils/auth';
-import { mockLeaveRequests, mockUsers } from '../data/mockData';
-import { formatDate, getRelativeDate } from '../utils/dateUtils';
+import React, { useEffect, useState } from 'react';
+import {
+  Calendar, Clock, CheckCircle, XCircle, Plus, Filter,
+  User, Send, MessageSquare, AlertTriangle, FileText
+} from 'lucide-react';
+import {
+  getCurrentUser, isDirector, isManager
+} from '../utils/auth';
+import {
+  formatDate, getRelativeDate
+} from '../utils/dateUtils';
 
 const LeaveManagement: React.FC = () => {
-  const user = getCurrentUser();
   const [showRequestForm, setShowRequestForm] = useState(false);
-  const [leaveRequests, setLeaveRequests] = useState(mockLeaveRequests);
-  const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
+  const [selectedRequest, setSelectedRequest] = useState<any>(null);
   const [approvalComments, setApprovalComments] = useState('');
+
+
+
+  const [users, setUsers] = useState<any[]>([]);
+  const [user, setUser] = useState<any>(null);
   const [filterStatus, setFilterStatus] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  const isDir = isDirector(user.role);
-  const isMgr = isManager(user.role);
-  const canApprove = isDir || isMgr;
+  useEffect(() => {
+  const fetchData = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const headers = {
+        Authorization: `Bearer ${token}`
+      };
 
-  const myRequests = leaveRequests.filter(lr => lr.userId === user.id);
-  
-  // Directors approve manager leaves, Managers approve employee/intern leaves
-  const pendingApprovals = leaveRequests.filter(lr => {
-    if (lr.status !== 'pending') return false;
-    
-    const requester = mockUsers.find(u => u.id === lr.userId);
-    if (!requester) return false;
+      // Fetch logged-in user
+      const authUserRes = await fetch('http://localhost:8000/api/user/profile', { headers });
+      if (!authUserRes.ok) throw new Error('Failed to fetch user');
+      const authUser = await authUserRes.json();
+      setUser(authUser);
 
-    if (isDir) {
-      // Directors approve manager leaves
-      return isManager(requester.role) && requester.managerId === user.id;
-    } else if (isMgr) {
-      // Managers approve employee/intern leaves
-      return (requester.role === 'employee' || requester.role === 'intern') && requester.managerId === user.id;
+      const role = authUser.role.toLowerCase();
+
+      const leaveUrl = role === 'employee' || role === 'intern'
+        ? 'http://localhost:8000/api/employee/leaves'
+        : `http://localhost:8000/api/${role}/leaves`;
+
+      // Fetch leaves and users in parallel
+      const [leaveRes, userListRes] = await Promise.all([
+        fetch(leaveUrl, { headers }),
+        fetch('http://localhost:8000/api/users', { headers })
+      ]);
+
+      if (!leaveRes.ok || !userListRes.ok) throw new Error('Failed to fetch data');
+
+      const leaveData = await leaveRes.json();
+      const userList = await userListRes.json();
+
+      // Map snake_case to camelCase
+      const mappedLeaves = leaveData.map((leave: any) => ({
+        id: leave.id,
+        userId: leave.user_id,
+        type: leave.leave_type,
+        startDate: leave.start_date,
+        endDate: leave.end_date,
+        reason: leave.reason,
+       status: leave.status?.toLowerCase(),
+        managerApproval: leave.manager_approval,
+        directorApproval: leave.director_approval,
+        createdAt: leave.created_at
+      }));
+
+      setLeaveRequests(mappedLeaves); // ✅ Use mapped version
+      setUsers(userList);
+      
+      console.log('🖥️ Rendered leaveRequests:', mappedLeaves);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
     }
-    
-    return false;
-  });
-
-  const handleApproval = (requestId: string, approved: boolean, comments?: string) => {
-    setLeaveRequests(prev => prev.map(request => {
-      if (request.id === requestId) {
-        return {
-          ...request,
-          status: approved ? 'approved' : 'rejected',
-          approverChain: request.approverChain.map(step => 
-            step.approverId === user.id 
-              ? { ...step, status: approved ? 'approved' : 'rejected', timestamp: new Date().toISOString(), comments }
-              : step
-          )
-        };
-      }
-      return request;
-    }));
-    
-    setSelectedRequest(null);
-    setApprovalComments('');
-    
-    // Show success notification
-    const action = approved ? 'approved' : 'rejected';
-    console.log(`Leave request ${action} successfully`);
   };
 
-  const handleLeaveSubmission = (formData: any) => {
-    const newRequest = {
-      id: `leave-${Date.now()}`,
-      userId: user.id,
-      startDate: formData.startDate,
-      endDate: formData.endDate,
+  fetchData();
+}, []);
+
+
+const isDir = isDirector(user?.role);
+const isMgr = isManager(user?.role);
+const canApprove = isDir || isMgr;
+
+const myRequests = leaveRequests.filter(lr => lr.userId === user?.id);
+
+const pendingApprovals = leaveRequests.filter(lr => {
+  const requester = users.find(u => u.id === lr.userId);
+  if (!requester) return false;
+
+  if (isDir) {
+    return requester.role === 'manager' && requester.managerId === user.id;
+  } else if (isMgr) {
+    return (requester.role === 'employee' || requester.role === 'intern') && requester.managerId === user.id;
+  }
+
+  return false;
+});
+
+const handleLeaveSubmission = async (formData: any) => {
+  try {
+    const role = user.role.toLowerCase();
+
+    const payload = {
+      leave_type: formData.leave_type,
+      start_date: formData.startDate,
+      end_date: formData.endDate,
       reason: formData.reason,
-      type: formData.type,
-      status: 'pending' as const,
-      approverChain: [
-        { approverId: user.managerId || '', status: 'pending' as const }
-      ],
-      createdAt: new Date().toISOString()
+      userId: user.id
     };
 
-    setLeaveRequests(prev => [...prev, newRequest]);
-    setShowRequestForm(false);
-    console.log('Leave request submitted successfully');
-  };
-
-  const filteredRequests = (requests: any[]) => {
-    return requests.filter(request => {
-      const matchesStatus = !filterStatus || request.status === filterStatus;
-      const matchesType = !filterType || request.type === filterType;
-      return matchesStatus && matchesType;
+    const res = await fetch(`http://localhost:8000/api/${role}/leave`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('token')}`
+      },
+      body: JSON.stringify(payload)
     });
-  };
+
+    const body = await res.json();
+    console.log('📡 Response status:', res.status);
+    console.log('📦 Response body:', body);
+
+    if (!res.ok) {
+      throw new Error(`Failed to submit leave request (${res.status})`);
+    }
+
+    // Map the returned leave item
+    const mappedLeave = {
+      id: body.id,
+      userId: body.user_id,
+      type: body.leave_type,
+      startDate: body.start_date,
+      endDate: body.end_date,
+      reason: body.reason,
+      status: body.status,
+      managerApproval: body.manager_approval,
+      directorApproval: body.director_approval,
+      createdAt: body.created_at
+    };
+
+    // Add it to the state
+    setLeaveRequests(prev => [...prev, mappedLeave]);
+  } catch (err) {
+    console.error('Error submitting leave:', err);
+
+    // Optional fallback: refetch all leaves if something fails
+    try {
+      const token = localStorage.getItem('token');
+      const updatedRes = await fetch(`http://localhost:8000/api/${user.role.toLowerCase()}/leaves`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const updatedList = await updatedRes.json();
+      const mapped = updatedList.map((leave: any) => ({
+        id: leave.id,
+        userId: leave.user_id,
+        type: leave.leave_type,
+        startDate: leave.start_date,
+        endDate: leave.end_date,
+        reason: leave.reason,
+       status: leave.status?.toLowerCase(),
+        managerApproval: leave.manager_approval,
+        directorApproval: leave.director_approval,
+        createdAt: leave.created_at
+      }));
+      
+      setLeaveRequests(mapped);
+    } catch (refetchErr) {
+      console.error('Error refetching leaves after failure:', refetchErr);
+    }
+  }
+};
+
+
+
+ const LEAVE_QUOTA = 20;
+const approvedLeaves = leaveRequests.filter(lr => lr.userId === user?.id && lr.status === 'approved');
+const usedDays = approvedLeaves.reduce((sum, lr) => {
+  const start = new Date(lr.startDate);
+  const end = new Date(lr.endDate);
+  return sum + Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+}, 0);
+
+const remainingDays = Math.max(0, LEAVE_QUOTA - usedDays);
+
+
+const filteredRequests = (requests: any[]) => {
+  return requests.filter(request => {
+    const status = (request.status ?? '').toLowerCase();
+    const type = (request.type ?? '').toLowerCase();
+    const matchesStatus = !filterStatus || status === filterStatus.toLowerCase();
+    const matchesType = !filterType || type === filterType.toLowerCase();
+    return matchesStatus && matchesType;
+  });
+};
+
 
   const LeaveRequestForm = () => {
     const [formData, setFormData] = useState({
-      type: 'vacation',
-      startDate: '',
-      endDate: '',
-      reason: ''
-    });
+  leave_type: 'vacation', // ✅ correct
+  startDate: '',
+  endDate: '',
+  reason: ''
+});
+console.log('🔍 Filter Status:', filterStatus);
+console.log('🔍 Filter Type:', filterType);
+
+
     const [errors, setErrors] = useState<Record<string, string>>({});
 
     const validateForm = () => {
@@ -104,7 +221,7 @@ const LeaveManagement: React.FC = () => {
       if (!formData.startDate) newErrors.startDate = 'Start date is required';
       if (!formData.endDate) newErrors.endDate = 'End date is required';
       if (!formData.reason.trim()) newErrors.reason = 'Reason is required';
-      
+
       if (formData.startDate && formData.endDate) {
         if (new Date(formData.startDate) > new Date(formData.endDate)) {
           newErrors.endDate = 'End date must be after start date';
@@ -136,9 +253,12 @@ const LeaveManagement: React.FC = () => {
           <form onSubmit={handleSubmit} className="p-6 space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Leave Type *</label>
-              <select 
-                value={formData.type}
-                onChange={(e) => setFormData(prev => ({ ...prev, type: e.target.value }))}
+              <select
+  name="leave_type"
+  value={formData.leave_type}
+  onChange={(e) => setFormData({ ...formData, leave_type: e.target.value })}
+
+
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="vacation">Vacation</option>
@@ -211,12 +331,21 @@ const LeaveManagement: React.FC = () => {
   };
 
   const ApprovalModal = ({ requestId }: { requestId: string }) => {
-    const request = leaveRequests.find(r => r.id === requestId);
-    const requester = mockUsers.find(u => u.id === request?.userId);
-    
-    if (!request || !requester) return null;
+    if (!user || leaveRequests.length === 0 || users.length === 0) {
+  return <div className="text-center text-gray-600 py-4">Loading...</div>;
+}
 
-    const daysDifference = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 3600 * 24)) + 1;
+const request = leaveRequests.find(r => r.id === requestId);
+const requester = users.find(u => u.id === request?.userId);
+
+if (!request || !requester) {
+  return <div className="text-center text-red-500 py-4">Request not found</div>;
+}
+
+const daysDifference = Math.ceil(
+  (new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 3600 * 24)
+) + 1;
+
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -340,20 +469,24 @@ const LeaveManagement: React.FC = () => {
       </div>
 
       {/* Leave Balance Card - Only for employees */}
-      {!canApprove && (
-        <div className="bg-gradient-to-r from-green-500 to-blue-600 rounded-xl shadow-lg p-6 text-white">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-xl font-semibold mb-2">Leave Balance</h2>
-              <p className="text-green-100">Available days for this year</p>
-            </div>
-            <div className="text-right">
-              <div className="text-4xl font-bold">{user.leaveBalance}</div>
-              <p className="text-green-100">days remaining</p>
-            </div>
-          </div>
-        </div>
-      )}
+     {!canApprove && user && (
+  <div className="bg-gradient-to-r from-green-500 to-blue-600 rounded-xl shadow-lg p-6 text-white">
+    <div className="flex items-center justify-between">
+      <div>
+        <h2 className="text-xl font-semibold mb-2">Leave Balance</h2>
+        <p className="text-green-100">Available days for this year</p>
+      </div>
+      <div className="text-right">
+        <div className="text-4xl font-bold">
+  {remainingDays}
+</div>
+
+        <p className="text-green-100">days remaining</p>
+      </div>
+    </div>
+  </div>
+)}
+
 
       {/* Stats Cards for Approvers */}
       {canApprove && (
@@ -475,8 +608,17 @@ const LeaveManagement: React.FC = () => {
                 </div>
               ) : (
                 filteredRequests(pendingApprovals).map((request) => {
-                  const requester = mockUsers.find(u => u.id === request.userId);
-                  const daysDifference = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 3600 * 24)) + 1;
+                  const requester = users.find(u => u.id === request.userId);
+
+                  const start = new Date(request?.start_date ?? request?.startDate ?? '');
+const end = new Date(request?.end_date ?? request?.endDate ?? '');
+const isValidDates = !isNaN(start.getTime()) && !isNaN(end.getTime());
+
+const daysDifference = isValidDates
+  ? Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1)
+  : 0;
+
+                  if (!requester) return null;
                   
                   return (
                     <div key={request.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
@@ -491,11 +633,12 @@ const LeaveManagement: React.FC = () => {
                             <div>
                               <h3 className="font-medium text-gray-900">{requester?.name}</h3>
                               <p className="text-sm text-gray-600 capitalize">
-                                {requester?.role.replace('_', ' ')} • {request.type.replace('_', ' ')} Leave
+                                {requester?.role?.replace('_', ' ') ?? 'Unknown'} • {request?.type?.replace('_', ' ') ?? 'Unknown'} Leave
+
                               </p>
                             </div>
                             <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">
-                              {daysDifference} day{daysDifference > 1 ? 's' : ''}
+                              {daysDifference > 0 ? `${daysDifference} day${daysDifference > 1 ? 's' : ''}` : 'N/A'}
                             </span>
                           </div>
                           <div className="ml-13">
@@ -506,7 +649,8 @@ const LeaveManagement: React.FC = () => {
                               <strong>Reason:</strong> {request.reason}
                             </p>
                             <p className="text-xs text-gray-500">
-                              Requested {getRelativeDate(request.createdAt)}
+                              Requested {getRelativeDate(request?.createdAt) ?? 'Unknown'}
+
                             </p>
                           </div>
                         </div>
@@ -526,131 +670,160 @@ const LeaveManagement: React.FC = () => {
               )}
             </div>
           ) : (
-            /* For Managers and Employees: Show both sections */
             <div className="space-y-6">
-              {/* My Requests Section */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                  {canApprove ? 'My Leave Requests' : 'My Requests'}
-                </h3>
-                <div className="space-y-4">
-                  {filteredRequests(myRequests).length === 0 ? (
-                    <div className="text-center py-8">
-                      <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                      <p className="text-gray-500">No leave requests found</p>
-                      {!canApprove && (
-                        <button
-                          onClick={() => setShowRequestForm(true)}
-                          className="mt-2 text-blue-600 hover:text-blue-800 font-medium"
-                        >
-                          Create your first request
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    filteredRequests(myRequests).map((request) => {
-                      const daysDifference = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 3600 * 24)) + 1;
-                      
-                      return (
-                        <div key={request.id} className="border border-gray-200 rounded-lg p-4">
-                          <div className="flex items-center justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center space-x-3">
-                                <h3 className="font-medium text-gray-900 capitalize">
-                                  {request.type.replace('_', ' ')} Leave
-                                </h3>
-                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                                  request.status === 'approved' ? 'bg-green-100 text-green-800' :
-                                  request.status === 'rejected' ? 'bg-red-100 text-red-800' :
-                                  'bg-yellow-100 text-yellow-800'
-                                }`}>
-                                  {request.status}
-                                </span>
-                                <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
-                                  {daysDifference} day{daysDifference > 1 ? 's' : ''}
-                                </span>
-                              </div>
-                              <p className="text-sm text-gray-600 mt-1">
-                                {formatDate(request.startDate)} - {formatDate(request.endDate)}
-                              </p>
-                              <p className="text-sm text-gray-500 mt-1">{request.reason}</p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm text-gray-500">
-                                Requested {getRelativeDate(request.createdAt)}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
+              
+  {/* My Requests Section */}
+  <div>
+    <h3 className="text-lg font-semibold text-gray-900 mb-4">
+      {canApprove ? 'My Leave Requests' : 'My Requests'}
+    </h3>
+    <div className="space-y-4">
+      {filteredRequests(myRequests).length === 0 ? (
+        <div className="text-center py-8">
+          <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-500">No leave requests found</p>
+          {!canApprove && (
+            <button
+              onClick={() => setShowRequestForm(true)}
+              className="mt-2 text-blue-600 hover:text-blue-800 font-medium"
+            >
+              Create your first request
+            </button>
+          )}
+        </div>
+      ) : (
+        filteredRequests(myRequests).map((request) => {
+          const daysDifference =
+  request?.startDate && request?.endDate
+    ? Math.max(
+        1,
+        Math.ceil(
+          (new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) /
+            (1000 * 60 * 60 * 24)
+        ) + 1
+      )
+    : 0;
+
+          return (
+            <div key={request.id} className="border border-gray-200 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center space-x-3">
+                    <h3 className="font-medium text-gray-900 capitalize">
+                      {request?.type ? request.type.replace('_', ' ') : 'Unknown'}
+
+                    </h3>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      request.status === 'approved'
+                        ? 'bg-green-100 text-green-800'
+                        : request.status === 'rejected'
+                        ? 'bg-red-100 text-red-800'
+                        : 'bg-yellow-100 text-yellow-800'
+                    }`}>
+                      {request.status ?? 'pending'}
+                    </span>
+                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
+                      {daysDifference > 0 ? `${daysDifference} day${daysDifference > 1 ? 's' : ''}` : 'N/A'}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {formatDate(request?.startDate)} - {formatDate(request?.endDate)}
+
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1">{request.reason}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-gray-500">
+                    Requested {getRelativeDate(request?.createdAt) ?? 'Unknown'}
+
+                  </p>
                 </div>
               </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  </div>
 
-              {/* Approvals Section for Managers */}
-              {canApprove && (
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">
-                    {isMgr ? 'Employee Approvals' : 'Approvals'}
-                  </h3>
-                  <div className="space-y-4">
-                    {filteredRequests(pendingApprovals).length === 0 ? (
-                      <div className="text-center py-8">
-                        <CheckCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                        <p className="text-gray-500">No pending approvals</p>
-                        <p className="text-sm text-gray-400 mt-1">
-                          No employee leave requests to review
+  {/* Approvals Section for Managers */}
+  {canApprove && (
+    <div>
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">
+        {isMgr ? 'Employee Approvals' : 'Approvals'}
+      </h3>
+      <div className="space-y-4">
+        {filteredRequests(pendingApprovals).length === 0 ? (
+          <div className="text-center py-8">
+            <CheckCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-500">No pending approvals</p>
+            <p className="text-sm text-gray-400 mt-1">
+              No employee leave requests to review
+            </p>
+          </div>
+        ) : (
+          filteredRequests(pendingApprovals).map((request) => {
+            const requester = users.find(u => u.id === request.user_id);
+            if (!requester) return null;
+
+            const daysDifference =
+  request?.startDate && request?.endDate
+    ? Math.max(
+        1,
+        Math.ceil(
+          (new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) /
+            (1000 * 60 * 60 * 24)
+        ) + 1
+      )
+    : 0;
+
+
+            return (
+              <div key={request.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-3 mb-2">
+                      <img
+                        src={requester?.avatar}
+                        alt={requester?.name}
+                        className="w-10 h-10 rounded-full object-cover"
+                      />
+                      <div>
+                        <h3 className="font-medium text-gray-900">{requester?.name}</h3>
+                        <p className="text-sm text-gray-600 capitalize">
+                          {requester?.role ? requester.role.replace('_', ' ') : 'Unknown'}
+
                         </p>
                       </div>
-                    ) : (
-                      filteredRequests(pendingApprovals).map((request) => {
-                        const requester = mockUsers.find(u => u.id === request.userId);
-                        const daysDifference = Math.ceil((new Date(request.endDate).getTime() - new Date(request.startDate).getTime()) / (1000 * 3600 * 24)) + 1;
-                        
-                        return (
-                          <div key={request.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                            <div className="flex items-center justify-between">
-                              <div className="flex-1">
-                                <div className="flex items-center space-x-3 mb-2">
-                                  <img
-                                    src={requester?.avatar}
-                                    alt={requester?.name}
-                                    className="w-10 h-10 rounded-full object-cover"
-                                  />
-                                  <div>
-                                    <h3 className="font-medium text-gray-900">{requester?.name}</h3>
-                                    <p className="text-sm text-gray-600 capitalize">
-                                      {requester?.role.replace('_', ' ')} • {request.type.replace('_', ' ')} Leave
-                                    </p>
-                                  </div>
-                                  <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">
-                                    {daysDifference} day{daysDifference > 1 ? 's' : ''}
-                                  </span>
-                                </div>
-                                <div className="ml-13">
-                                  <p className="text-sm text-gray-600 mb-1">
-                                    <strong>Duration:</strong> {formatDate(request.startDate)} - {formatDate(request.endDate)}
-                                  </p>
-                                  <p className="text-sm text-gray-600 mb-2">
-                                    <strong>Reason:</strong> {request.reason}
-                                  </p>
-                                  <p className="text-xs text-gray-500">
-                                    Requested {getRelativeDate(request.createdAt)}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="flex space-x-2">
-                                <button
-                                  onClick={() => setSelectedRequest(request.id)}
-                                  className="flex items-center space-x-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                                >
-                                  <MessageSquare className="w-4 h-4" />
-                                  <span>Review</span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
+                      <span className="px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">
+                        {daysDifference > 0 ? `${daysDifference} day${daysDifference > 1 ? 's' : ''}` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div className="ml-13">
+                      <p className="text-sm text-gray-600 mb-1">
+                        <strong>Duration:</strong> {formatDate(request.start_date)} - {formatDate(request.end_date)}
+                      </p>
+                      <p className="text-sm text-gray-600 mb-2">
+                        <strong>Reason:</strong> {request.reason}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Requested {getRelativeDate(request?.created_at) ?? 'Unknown'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={() => setSelectedRequest(request.id)}
+                      className="flex items-center space-x-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      <span>Review</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
                         );
                       })
                     )}

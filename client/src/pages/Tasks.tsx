@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { Plus, Filter, Calendar, User, Flag, CheckCircle, Clock, AlertCircle, TrendingUp, Send, Edit, Trash2, Eye, MessageSquare } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Plus, Filter, Calendar, CheckCircle,
+  Clock, AlertCircle, TrendingUp, Send, Edit,
+  Trash2
+} from 'lucide-react';
 import { getCurrentUser, isDirector, isManager } from '../utils/auth';
-import { mockTasks, mockProjects, mockUsers } from '../data/mockData';
-import { formatDate, getDaysUntilDeadline, isOverdue } from '../utils/dateUtils';
+import { getDaysUntilDeadline, isOverdue } from '../utils/dateUtils';
 
 const Tasks: React.FC = () => {
   const user = getCurrentUser();
@@ -11,70 +14,114 @@ const Tasks: React.FC = () => {
   const [showProgressForm, setShowProgressForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
-  const [tasks, setTasks] = useState(mockTasks);
   const [filterStatus, setFilterStatus] = useState('');
   const [filterPriority, setFilterPriority] = useState('');
+  const [tasks, setTasks] = useState<any[]>([]);
+  const [projects, setProjects] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
 
   const canManageTasks = isDirector(user.role) || isManager(user.role);
-  
+
+ useEffect(() => {
+  const token = localStorage.getItem('token');
+  if (!token) return;
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+
+  const fetchData = async () => {
+    try {
+      const [tasksRes, progressRes, usersRes] = await Promise.all([
+        fetch('http://localhost:8000/api/employee/tasks', { headers }),
+        fetch('http://localhost:8000/api/employee/progress', { headers }),
+        fetch('http://localhost:8000/api/user/profile', { headers }),
+      ]);
+
+      if (!tasksRes.ok) throw new Error(await tasksRes.text());
+      if (!usersRes.ok) throw new Error(await usersRes.text());
+
+      const [tasksData, progressData, userData] = await Promise.all([
+        tasksRes.json(),
+        progressRes.json(),
+        usersRes.json(),
+      ]);
+
+      setTasks(tasksData);
+      setUsers([userData]); // only the logged-in user
+    } catch (err: any) {
+      console.error('❌ Error fetching dashboard data:', err.message);
+    }
+  };
+
+  fetchData();
+}, []);
+
   const myTasks = tasks.filter(t => t.assigneeId === user.id);
-  const teamTasks = canManageTasks ? tasks.filter(t => {
-    const assignee = mockUsers.find(u => u.id === t.assigneeId);
-    return assignee?.managerId === user.id;
-  }) : [];
+
+  const teamTasks = canManageTasks
+    ? tasks.filter(t => {
+        const assignee = users.find(u => u.id === t.assigneeId);
+        return assignee?.managerId === user.id;
+      })
+    : [];
 
   const currentTasks = activeTab === 'my-tasks' ? myTasks : teamTasks;
+
   const filteredTasks = currentTasks.filter(task => {
     const matchesStatus = !filterStatus || task.status === filterStatus;
     const matchesPriority = !filterPriority || task.priority === filterPriority;
     return matchesStatus && matchesPriority;
   });
 
-  const handleCreateTask = (taskData: any) => {
-    const newTask = {
-      id: `task-${Date.now()}`,
-      projectId: taskData.projectId,
-      title: taskData.title,
-      description: taskData.description,
-      assigneeId: taskData.assigneeId,
-      status: 'todo' as const,
-      priority: taskData.priority,
-      dueDate: taskData.dueDate,
-      progressPct: 0,
-      createdAt: new Date().toISOString()
-    };
+  const handleCreateTask = async (taskData: any) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch('http://localhost:8000/api/employee/tasks', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(taskData),
+    });
 
-    setTasks(prev => [...prev, newTask]);
-    setShowCreateForm(false);
-    console.log('Task created successfully');
+    if (res.ok) {
+      const created = await res.json();
+      setTasks(prev => [...prev, created]);
+      setShowCreateForm(false);
+    } else {
+      console.error('Error creating task:', await res.text());
+    }
   };
 
   const handleUpdateProgress = (taskId: string, progressData: any) => {
-    setTasks(prev => prev.map(task => 
-      task.id === taskId 
-        ? { ...task, progressPct: progressData.progress, status: progressData.status }
-        : task
-    ));
+    setTasks(prev =>
+      prev.map(task =>
+        task.id === taskId
+          ? { ...task, progressPct: progressData.progress, status: progressData.status }
+          : task
+      )
+    );
     setShowProgressForm(false);
     setSelectedTask(null);
-    console.log('Task progress updated successfully');
   };
 
   const handleEditTask = (taskId: string, taskData: any) => {
-    setTasks(prev => prev.map(task => 
-      task.id === taskId 
-        ? { ...task, ...taskData }
-        : task
-    ));
+    setTasks(prev =>
+      prev.map(task =>
+        task.id === taskId
+          ? { ...task, ...taskData }
+          : task
+      )
+    );
     setShowEditForm(false);
     setSelectedTask(null);
-    console.log('Task updated successfully');
   };
 
   const handleDeleteTask = (taskId: string) => {
     if (window.confirm('Are you sure you want to delete this task?')) {
       setTasks(prev => prev.filter(task => task.id !== taskId));
-      console.log('Task deleted successfully');
     }
   };
 
@@ -108,8 +155,8 @@ const Tasks: React.FC = () => {
   };
 
   const TaskCard = ({ task, showAssignee = false }: { task: any; showAssignee?: boolean }) => {
-    const project = mockProjects.find(p => p.id === task.projectId);
-    const assignee = mockUsers.find(u => u.id === task.assigneeId);
+    const project = projects.find(p => p.id === task.projectId);
+    const assignee = users.find(u => u.id === task.assigneeId);
     const daysUntil = getDaysUntilDeadline(task.dueDate);
     const overdue = isOverdue(task.dueDate);
     const isMyTask = task.assigneeId === user.id;
@@ -241,7 +288,7 @@ const Tasks: React.FC = () => {
       }
     };
 
-    const teamMembers = mockUsers.filter(u => u.managerId === user.id);
+    const teamMembers = users.filter((u: any) => u.managerId === user.id);
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -291,7 +338,7 @@ const Tasks: React.FC = () => {
                   }`}
                 >
                   <option value="">Select project...</option>
-                  {mockProjects.map(project => (
+                  {projects.map((project: any) => (
                     <option key={project.id} value={project.id}>{project.title}</option>
                   ))}
                 </select>
@@ -480,7 +527,7 @@ const Tasks: React.FC = () => {
       }
     };
 
-    const teamMembers = mockUsers.filter(u => u.managerId === user.id);
+    const teamMembers = users.filter((u: any) => u.managerId === user.id);
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
