@@ -10,6 +10,7 @@ import {
 
 // Interfaces
 interface AttendanceRecord {
+  user_id: string;
   id: string;
   userId: string;
   date: string;
