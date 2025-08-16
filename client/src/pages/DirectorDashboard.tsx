@@ -61,15 +61,20 @@ const DirectorDashboard: React.FC = () => {
         setManagers(managersData);
 
         // Fetch tasks
-        const tasksResponse = await fetch('http://localhost:8000/api/director/tasks', {
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        });
-        if (!tasksResponse.ok) throw new Error(await tasksResponse.text());
-        const tasksData = await tasksResponse.json();
-        setTasks(tasksData);
+      const tasksResponse = await fetch('http://localhost:8000/api/director/tasks', {
+  headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+});
+
+if (!tasksResponse.ok) throw new Error(await tasksResponse.text());
+
+const tasksData = await tasksResponse.json();
+
+// If the API returns { tasks: [...] }
+setTasks(tasksData.tasks); // <-- make sure this is an array
+
 
         // Fetch progress reports
-        const progressResponse = await fetch('http://localhost:8000/api/director/progress-reports', {
+        const progressResponse = await fetch('http://localhost:8000/api/director/progress-report', {
           headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
         });
         if (!progressResponse.ok) throw new Error(await progressResponse.text());
