@@ -118,7 +118,7 @@ useEffect(() => {
           avatar: `https://images.pexels.com/photos/${Math.floor(Math.random() * 1000000)}/pexels-photo-${Math.floor(Math.random() * 1000000)}.jpeg?auto=compress&cs=tinysrgb&w=150`,
           createdAt: new Date().toISOString(),
           status: 'active',
-          director_id: currentUser.id
+          director_id: currentUser?.id ?? ''
         }),
       });
 
