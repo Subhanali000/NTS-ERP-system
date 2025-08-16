@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { Users, ClipboardList, Calendar, TrendingUp, CheckCircle, Briefcase, BarChart3, Target, UserCheck, Plus, Clock, AlertTriangle, MessageSquare, Award, Star, Eye, Edit, Trash2, Send, Filter, Search, Activity, PieChart, Code, Database, Palette, Server, Bug, Badge } from 'lucide-react';
+import { Users, ClipboardList, Calendar, TrendingUp, CheckCircle, Briefcase, BarChart3, Target,  Plus, Clock, AlertTriangle, MessageSquare,  Star, Eye, PieChart, Code, Database, Palette, Server, Bug, Badge } from 'lucide-react';
 import { getCurrentUser } from '../utils/auth';
 import { mockUsers, mockTasks, mockLeaveRequests, mockProjects } from '../data/mockData';
-import { formatDate, getDaysUntilDeadline, isOverdue, getRelativeDate, formatDateTime } from '../utils/dateUtils';
+import { formatDate, getDaysUntilDeadline, isOverdue } from '../utils/dateUtils';
 import { getRoleDisplayName } from '../utils/auth';
 import { Bar, Line, Doughnut, Radar } from 'react-chartjs-2';
 import {
@@ -38,14 +38,16 @@ const TeamLeadDashboard: React.FC = () => {
   const [showLeaveReview, setShowLeaveReview] = useState<string | null>(null);
 
   // Get team data - only one team under team lead
-  const teamMembers = mockUsers.filter(u => u.managerId === user.id);
+  const teamMembers = user ? mockUsers.filter(u => u.managerId === user.id) : [];
   const teamTasks = mockTasks.filter(t => 
     teamMembers.some(member => member.id === t.assigneeId)
   );
   const pendingLeaveRequests = mockLeaveRequests.filter(lr => 
     lr.status === 'pending' && teamMembers.some(tm => tm.id === lr.userId)
   );
-  const managedProjects = mockProjects.filter(p => p.managerId === user.id);
+  const managedProjects = user
+    ? mockProjects.filter(p => p.managerId === user.id)
+    : [];
 
   // Calculate metrics
   const completedTasks = teamTasks.filter(t => t.status === 'completed').length;
@@ -301,9 +303,10 @@ const TeamLeadDashboard: React.FC = () => {
         pointLabels: {
           font: {
             size: 12,
-            weight: 'bold'
-          }
-        }
+          weight: 'bold' as 'bold', // ✅ cast to exact allowed value
+        } as any, // ✅ cast to bypass deep partial typing
+      },
+        
       },
     },
   };
@@ -778,7 +781,8 @@ const TeamLeadDashboard: React.FC = () => {
             <span>Team Skills Assessment</span>
           </h3>
           <div className="h-80">
-            <Radar data={teamSkillsData} options={radarOptions} />
+           <Radar data={teamSkillsData} options={radarOptions} />
+
           </div>
         </div>
       </div>
