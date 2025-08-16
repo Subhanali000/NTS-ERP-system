@@ -20,7 +20,7 @@ const TeamTaskManagement: React.FC<TeamTaskManagementProps> = ({ onCreateTask })
   const [searchTerm, setSearchTerm] = useState('');
 
   // Get team members under this manager
-  const teamMembers = mockUsers.filter(u => u.managerId === user.id);
+  const teamMembers = user ? mockUsers.filter(u => u.managerId === user.id) : [];
   
   // Get tasks assigned to team members
   const teamTasks = tasks.filter(t => 
@@ -226,7 +226,7 @@ const TeamTaskManagement: React.FC<TeamTaskManagementProps> = ({ onCreateTask })
               <label className="block text-sm font-medium text-gray-700 mb-2">Status</label>
               <select
                 value={newStatus}
-                onChange={(e) => setNewStatus(e.target.value)}
+                onChange={(e) => setNewStatus(e.target.value as "todo" | "in_progress" | "review" | "completed")}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="todo">To Do</option>
