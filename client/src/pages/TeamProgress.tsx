@@ -1,225 +1,406 @@
-import React, { useState } from 'react';
-import { Calendar, ChevronLeft, ChevronRight, Send, Plus, Clock, CheckCircle, TrendingUp, Eye, X, Award, Target, MessageSquare, Filter, Search, Users, BarChart3 } from 'lucide-react';
-import { getCurrentUser, isManager, isTeamLead } from '../utils/auth';
-import { mockUsers } from '../data/mockData';
-import { formatDate, getCurrentDate } from '../utils/dateUtils';
-import { getRoleDisplayName } from '../utils/auth';
+import React, { useState, useEffect } from 'react';
+import { MultiValue } from 'react-select';
+import axios from 'axios';
+import { getCurrentUser, getSimpleDesignation } from '../utils/auth';
+import { getCurrentDate } from '../utils/dateUtils';
+import { 
+  Calendar, 
+  CheckCircle, 
+  Clock, 
+  Award, 
+  TrendingUp, 
+  Users, XCircle,
+  ChevronLeft, 
+  ChevronRight, 
+  Eye, 
+  MessageSquare, 
+  X, 
+  Send,
+  ThumbsUp,
+  ThumbsDown
+} from 'lucide-react';
+import Select from 'react-select';
+
+type AvailableUser = {
+  id: string;
+  name: string;
+  isCurrentUser?: boolean;
+};
+
+type TaskOption = {
+  label: string;
+  value: number;
+  isDisabled?: boolean;
+};
+
+type FormData = {
+  progress: number;
+  accomplishments: string;
+  challenges: string;
+  tomorrowPlan: string;
+  tasks: number[];
+};
+type Report = {
+  id: string;
+  status: 'pending' | 'approved' | 'rejected';
+  managerFeedback?: string;
+  tasks: { title: string }[] | number[];
+  // add other fields as needed
+};
+// Normalize role access
+const getUserAccessLevel = (role: string): 'director' | 'manager' | 'employee' => {
+  const normalized = role?.toLowerCase().replace(/\s+/g, '_') || '';
+  if (normalized.includes('director') || normalized.includes('ceo')) return 'director';
+  if (
+    normalized.includes('manager') ||
+    normalized.includes('lead') ||
+    normalized === 'project_tech_manager'
+  )
+    return 'manager';
+  return 'employee';
+};
+
+// Get team members user can access
+const getAccessibleTeamMembers = (user: any, teamMembers: any[]): any[] => {
+  if (!user || !Array.isArray(teamMembers)) return [];
+
+  console.log('Getting accessible team members for user:', user);
+  console.log('Available team members:', teamMembers);
+
+  const accessLevel = getUserAccessLevel(user.role);
+  console.log('User access level:', accessLevel);
+
+  if (accessLevel === 'director') {
+    // Directors can see all team members
+    return teamMembers;
+  }
+
+  if (accessLevel === 'manager') {
+    // Managers can see themselves and their direct reports
+    const directReports = teamMembers.filter((m) => m.manager_id === user.id);
+    const selfInTeam = teamMembers.find((m) => m.id === user.id);
+    
+    // If manager is not in the team list, add them
+    if (!selfInTeam) {
+      return [user, ...directReports];
+    }
+    
+    return [selfInTeam, ...directReports.filter(m => m.id !== user.id)];
+  }
+
+  // Employees can only see themselves
+  const selfInTeam = teamMembers.find((m) => m.id === user.id);
+  return selfInTeam ? [selfInTeam] : [user];
+};
 
 const TeamProgress: React.FC = () => {
-  const user = getCurrentUser();
-  const [selectedDate, setSelectedDate] = useState(getCurrentDate());
-  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+  const [user] = useState(() => getCurrentUser() || { id: '', role: 'employee' });
+  const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  const [reports, setReports] = useState<any[]>([]);
+  const [userReports, setUserReports] = useState<any[]>([]);
+  const [selectedUser, setSelectedUser] = useState(user?.id || '');
+  const [reportUser, setReportUser] = useState<{ id: string; name: string } | null>(null);
+  const [feedback, setFeedback] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+  const [selectedDate, setSelectedDate] = useState('');
   const [showSubmitForm, setShowSubmitForm] = useState(false);
   const [showViewReport, setShowViewReport] = useState(false);
   const [viewingReport, setViewingReport] = useState<any>(null);
-  const [selectedUser, setSelectedUser] = useState(user.id);
-  const [calendarView, setCalendarView] = useState<'month' | 'week'>('month');
+  const [availableTasks, setAvailableTasks] = useState<any[]>([]);
 
-  const isMgr = isManager(user.role);
-  const isTeamLd = isTeamLead(user.role);
-  const canViewTeamProgress = isMgr || isTeamLd;
+const [formData, setFormData] = useState<FormData>({
+  progress: 0,
+  accomplishments: '',
+  challenges: '',
+  tomorrowPlan: '',
+  tasks: [],
+});
 
-  if (!canViewTeamProgress) {
-    return (
-      <div className="text-center py-16">
-        <Users className="w-20 h-20 text-gray-400 mx-auto mb-6" />
-        <h3 className="text-2xl font-bold text-gray-900 mb-4">Access Restricted</h3>
-        <p className="text-gray-600 text-lg">This page is only available for Managers and Team Leads.</p>
-      </div>
-    );
-  }
+  const canViewTeam = getUserAccessLevel(user.role) !== 'employee';
+  const userAccessLevel = getUserAccessLevel(user.role);
 
-  // Get team members under the manager/team lead
-  const teamMembers = mockUsers.filter(u => u.managerId === user.id);
+  // Fetch data
+  useEffect(() => {
+  const fetchData = async () => {
+    if (!user?.id) return;
 
-  // Mock team members for Team Lead (5 members as specified)
-  const mockTeamMembers = [
-    {
-      id: 'tm-1',
-      name: 'Alex Rodriguez',
-      avatar: 'https://images.pexels.com/photos/1222271/pexels-photo-1222271.jpeg?auto=compress&cs=tinysrgb&w=150',
-      role: 'employee'
-    },
-    {
-      id: 'tm-2',
-      name: 'Sarah Chen',
-      avatar: 'https://images.pexels.com/photos/1181424/pexels-photo-1181424.jpeg?auto=compress&cs=tinysrgb&w=150',
-      role: 'employee'
-    },
-    {
-      id: 'tm-3',
-      name: 'Marcus Johnson',
-      avatar: 'https://images.pexels.com/photos/1043471/pexels-photo-1043471.jpeg?auto=compress&cs=tinysrgb&w=150',
-      role: 'employee'
-    },
-    {
-      id: 'tm-4',
-      name: 'Emily Davis',
-      avatar: 'https://images.pexels.com/photos/1239291/pexels-photo-1239291.jpeg?auto=compress&cs=tinysrgb&w=150',
-      role: 'employee'
-    },
-    {
-      id: 'tm-5',
-      name: 'Jordan Smith',
-      avatar: 'https://images.pexels.com/photos/1300402/pexels-photo-1300402.jpeg?auto=compress&cs=tinysrgb&w=150',
-      role: 'employee'
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const headers = { Authorization: `Bearer ${token}` };
+
+      const [reportRes, teamRes] = await Promise.all([
+        axios.get('http://localhost:8000/api/manager/progress-reports', { headers }),
+        canViewTeam
+          ? axios.get('http://localhost:8000/api/manager/users/team', { headers }).catch(() => ({ data: { data: [] } }))
+          : Promise.resolve({ data: [user] }),
+      ]);
+
+      console.log('Team members fetched:', teamRes.data);
+      console.log('Reports fetched:', reportRes.data);
+
+      const normalizedReports = reportRes.data.map((report: any) => {
+        const status = report.status || 'pending'; // ✅ fallback to 'pending'
+
+        return {
+          ...report,
+          userId: report.user_id,
+          date: report.report_date?.split('T')[0] || report.created_at?.split('T')[0],
+          submittedAt: report.submitted_at || report.created_at || null,
+          submitted: true,
+          progress: report.progress_percent || report.progress || 0,
+          accomplishments: report.accomplishments || '',
+          challenges: report.challenges || '',
+          tomorrowPlan: report.tomorrow_plan || '',
+          tasks: report.taskCount || 0,
+          taskDetails: Array.isArray(report.tasks) && typeof report.tasks[0] === 'object'
+            ? report.tasks.map((task: any) => task.title || 'Untitled Task')
+            : [],
+          approved: status === 'approved',         // ✅ interpret status
+          rejected: status === 'rejected',         // ✅ add rejected flag
+          pending: status === 'pending',           // ✅ optional: track pending
+          status: status,                          // ✅ retain raw status
+          managerFeedback: report.manager_feedback || '',
+        };
+      });
+
+      console.log("Approved status of first report:", normalizedReports[0]?.approved);
+
+      setReports(normalizedReports);
+      // Handle the nested data structure from your API
+      const teamData = teamRes.data?.data ? teamRes.data.data : (Array.isArray(teamRes.data) ? teamRes.data : []);
+      setTeamMembers(teamData);
+      
+      console.log('Accessible team members:', getAccessibleTeamMembers(user, teamData));
+    } catch (err) {
+      console.error('Error fetching data:', err);
+      setError('Could not load team or report data.');
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
 
-  // Use mock team members for Team Lead, actual team members for Manager
-  const displayTeamMembers = isTeamLd ? mockTeamMembers : teamMembers;
+  fetchData();
+}, [user.id, canViewTeam]);
 
-  // Mock users for manager/team lead view
-  const availableUsers = [
-    { id: user.id, name: 'My Progress', role: user.role },
-    ...displayTeamMembers.map(member => ({
-      id: member.id,
-      name: member.name,
-      role: member.role
-    }))
-  ];
 
-  // Enhanced progress reports with more comprehensive data for team members
-  const progressReportsWithDates = [
-    // Current user's reports
-    { 
-      userId: user.id,
-      date: '2024-02-15', 
-      submitted: true, 
-      progress: 85, 
-      tasks: 3, 
-      approved: true,
-      managerFeedback: "Excellent progress on team management!",
-      accomplishments: "Led team standup meetings, reviewed 8 pull requests, conducted performance reviews for 3 team members. Completed project milestone planning and coordinated with stakeholders.",
-      challenges: "Resource allocation conflicts between projects. Need to balance team workload better and manage competing priorities.",
-      tomorrowPlan: "Meet with stakeholders for Q2 planning. Review team capacity and redistribute tasks. Focus on improving cross-team communication.",
-      submittedAt: "2024-02-15T17:30:00Z"
-    },
-    // Team member reports
-    ...displayTeamMembers.flatMap(member => [
+  // Update user reports when selectedUser changes
+  useEffect(() => {
+    const filtered = reports.filter(
+      (r) => r.userId === selectedUser || r.user_id === selectedUser
+    );
+    setUserReports(filtered);
+  }, [selectedUser, reports]);
+
+  // Fetch tasks
+  useEffect(() => {
+    const fetchTasks = async () => {
+      try {
+        if (!user?.id) return;
+
+        const token = localStorage.getItem("token");
+        const apiRole = getSimpleDesignation(user.role);
+
+        const res = await fetch(`http://localhost:8000/api/${apiRole}/tasks`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!res.ok) throw new Error("Failed to fetch tasks");
+
+        const data = await res.json();
+        const formattedTasks = data
+          .map((task: any) => ({
+            label: task.title + (task.status === "completed" ? " (Completed)" : ""),
+            value: task.id,
+            isDisabled: task.status === "completed",
+          }))
+          .sort((a: any, b: any) =>
+            a.isDisabled === b.isDisabled ? 0 : a.isDisabled ? 1 : -1
+          );
+
+        setAvailableTasks(formattedTasks);
+      } catch (err) {
+        console.error("Failed to fetch tasks", err);
+        setAvailableTasks([]);
+      }
+    };
+
+    if (user?.id && availableTasks.length === 0) {
+      fetchTasks();
+    }
+  }, [user?.id, availableTasks.length]);
+
+  // Handle approval/rejection
+const handleApproval = async (isApproved: boolean) => {
+  if (!viewingReport) return;
+
+  try {
+    setIsSubmitting(true);
+    const token = localStorage.getItem('token');
+    const apiRole = getSimpleDesignation(user.role);
+
+    await axios.post(
+      `http://localhost:8000/api/${apiRole}/progress-reports/${viewingReport.id}/review`,
       {
-        userId: member.id,
-        date: '2024-02-15',
-        submitted: true,
-        progress: Math.floor(Math.random() * 30) + 70,
-        tasks: Math.floor(Math.random() * 4) + 2,
-        approved: Math.random() > 0.3,
-        managerFeedback: Math.random() > 0.5 ? "Good progress, keep up the excellent work!" : "",
-        accomplishments: "Completed assigned tasks and collaborated with team members. Made significant progress on current project deliverables.",
-        challenges: "Some technical challenges with new framework implementation. Need additional time for testing.",
-        tomorrowPlan: "Continue with current tasks and attend team meeting. Focus on resolving technical issues.",
-        submittedAt: "2024-02-15T16:45:00Z"
+        managerFeedback: feedback,
+        approved: isApproved,
       },
       {
-        userId: member.id,
-        date: '2024-02-14',
-        submitted: true,
-        progress: Math.floor(Math.random() * 30) + 70,
-        tasks: Math.floor(Math.random() * 4) + 2,
-        approved: true,
-        managerFeedback: "Great work on the project deliverables!",
-        accomplishments: "Successfully completed development tasks and participated in code reviews. Helped junior team members with technical issues.",
-        challenges: "Minor delays due to dependency issues with external APIs. Working on alternative solutions.",
-        tomorrowPlan: "Focus on completing remaining tasks and preparing for client presentation.",
-        submittedAt: "2024-02-14T17:15:00Z"
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       }
-    ]),
-    // Add more historical data
-    ...Array.from({ length: 20 }, (_, i) => {
-      const date = new Date();
-      date.setDate(date.getDate() - i - 1);
-      const dateStr = date.toISOString().split('T')[0];
-      const isSubmitted = Math.random() > 0.2; // 80% submission rate
-      const randomUserId = Math.random() > 0.5 ? user.id : displayTeamMembers[Math.floor(Math.random() * displayTeamMembers.length)]?.id || user.id;
-      
-      return {
-        userId: randomUserId,
-        date: dateStr,
-        submitted: isSubmitted,
-        progress: isSubmitted ? Math.floor(Math.random() * 40) + 60 : 0,
-        tasks: isSubmitted ? Math.floor(Math.random() * 5) + 1 : 0,
-        approved: isSubmitted ? Math.random() > 0.3 : false,
-        accomplishments: isSubmitted ? "Daily accomplishments and progress updates..." : "",
-        challenges: isSubmitted ? "Challenges faced during the day..." : "",
-        tomorrowPlan: isSubmitted ? "Plans for tomorrow..." : "",
-        submittedAt: isSubmitted ? `${dateStr}T${17 + Math.floor(Math.random() * 3)}:${Math.floor(Math.random() * 60).toString().padStart(2, '0')}:00Z` : ""
+    );
+
+    const newStatus = isApproved ? 'approved' : 'rejected';
+
+    // Update the report in state
+    setReports(prevReports => 
+      prevReports.map(report => 
+        report.id === viewingReport.id 
+          ? { ...report, status: newStatus, managerFeedback: feedback }
+          : report
+      )
+    );
+
+    setViewingReport((prev: Report | null) =>
+  prev ? { ...prev, status: 'approved', managerFeedback: feedback } : prev
+);
+
+
+    alert(`Report ${isApproved ? 'approved' : 'rejected'} successfully`);
+    setFeedback('');
+  } catch (error) {
+    console.error('Error submitting review:', error);
+    alert('Failed to submit review.');
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+
+
+  const formatDate = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString(undefined, {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  };
+
+  if (loading) return <div className="flex items-center justify-center min-h-screen"><div className="text-xl">Loading...</div></div>;
+  if (error) return <div className="flex items-center justify-center min-h-screen text-red-600"><div>Error: {error}</div></div>;
+
+  // Build user options
+  const accessibleTeamMembers = getAccessibleTeamMembers(user, teamMembers);
+  console.log('Final accessible team members:', accessibleTeamMembers);
+  
+  const getUserDisplayName = (member: any) => {
+    if (!member) return 'Unknown User';
+    
+    // Try different name fields
+    if (member.name?.trim()) return member.name.trim();
+    
+    const fullName = `${member.firstName || ''} ${member.lastName || ''}`.trim();
+    if (fullName) return fullName;
+    
+    if (member.email) return member.email;
+    
+    return 'Unnamed User';
+  };
+
+  const availableUsers: AvailableUser[] = canViewTeam
+    ? accessibleTeamMembers.map((m) => {
+        const displayName = getUserDisplayName(m);
+        return {
+        id: m.id,
+        name: displayName,
+        isCurrentUser: m.id === user.id,
       };
-    }),
-    { 
-      userId: user.id,
-      date: getCurrentDate(), 
-      submitted: false, 
-      progress: 0, 
-      tasks: 0, 
-      approved: false,
-      accomplishments: "",
-      challenges: "",
-      tomorrowPlan: ""
-    }
-  ];
+    })
+    : [{ id: user.id, name: 'My Progress', isCurrentUser: true }];
 
-  // Filter reports by selected user
-  const userReports = progressReportsWithDates.filter(r => r.userId === selectedUser);
+  console.log('Available users for dropdown:', availableUsers);
 
-  const CalendarView = () => {
+  // Calendar View Component
+  const CalendarView: React.FC<any> = () => {
     const today = getCurrentDate();
     const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
     const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getDay();
-    
     const days = [];
-    
-    // Empty cells for days before the first day of the month
+    const isCurrentUser = selectedUser === user?.id;
+
     for (let i = 0; i < firstDayOfMonth; i++) {
-      days.push(<div key={`empty-${i}`} className="p-2"></div>);
+      days.push(<div key={`empty-${i}`} className="p-2" />);
     }
-    
-    // Days of the month
+
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const reportData = userReports.find(r => r.date === dateStr);
+      const reportData = userReports.find((r) => r.date === dateStr);
       const isToday = dateStr === today;
       const isPast = new Date(dateStr) < new Date(today);
       const isFuture = new Date(dateStr) > new Date(today);
-      const isCurrentUser = selectedUser === user.id;
-      
-      // Get all reports for this date from all team members (when viewing "My Progress")
-      const allReportsForDate = isCurrentUser ? 
-        progressReportsWithDates.filter(r => r.date === dateStr && r.userId !== user.id) : 
-        [];
-      
+
       days.push(
         <div
           key={day}
           onClick={() => {
-            setSelectedDate(dateStr);
-            if (isToday && !reportData?.submitted && isCurrentUser) {
+            if (isFuture) return;
+
+            const isSubmitted = reportData?.submitted;
+            const isOwnUnsubmittedToday = isToday && !isSubmitted && isCurrentUser;
+
+            if (isOwnUnsubmittedToday) {
+              setSelectedDate(dateStr);
               setShowSubmitForm(true);
-            } else if (reportData?.submitted) {
+              return;
+            }
+
+            if (isSubmitted) {
               setViewingReport(reportData);
+              const reportUser = availableUsers.find(
+                (u) => u.id === (reportData.userId || reportData.user_id)
+              );
+              setReportUser(reportUser || null);
               setShowViewReport(true);
             }
           }}
           className={`p-4 border rounded-xl cursor-pointer transition-all duration-300 min-h-[160px] hover:shadow-lg transform hover:scale-105 ${
-            isToday ? 'bg-gradient-to-br from-blue-100 via-blue-200 to-purple-200 border-blue-500 ring-2 ring-blue-300 shadow-xl' :
-            isPast && reportData?.submitted ? 'bg-gradient-to-br from-green-50 via-green-100 to-emerald-100 border-green-300 hover:bg-green-100' :
-            isPast && !reportData?.submitted ? 'bg-gradient-to-br from-red-50 via-red-100 to-pink-100 border-red-300' :
-            isFuture ? 'bg-gray-50 border-gray-200 cursor-not-allowed opacity-60' :
-            'bg-white border-gray-200 hover:bg-gray-50'
+            isToday
+              ? 'bg-gradient-to-br from-blue-100 via-blue-200 to-purple-200 border-blue-500 ring-2 ring-blue-300 shadow-xl'
+              : isPast && reportData?.submitted
+              ? 'bg-gradient-to-br from-green-50 via-green-100 to-emerald-100 border-green-300 hover:bg-green-100'
+              : isPast && !reportData?.submitted
+              ? 'bg-gradient-to-br from-red-50 via-red-100 to-pink-100 border-red-300'
+              : isFuture
+              ? 'bg-gray-50 border-gray-200 cursor-not-allowed opacity-60'
+              : 'bg-white border-gray-200 hover:bg-gray-50'
           }`}
         >
           <div className="text-lg font-bold text-gray-900 mb-2">{day}</div>
-          
+
           {reportData?.submitted && (
             <div className="space-y-2">
               <div className="flex items-center space-x-1">
                 <CheckCircle className="w-4 h-4 text-green-600" />
                 <span className="text-xs text-green-700 font-semibold">Submitted</span>
                 <span className="text-xs text-gray-500">
-                  {new Date(reportData.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {reportData?.submittedAt
+                    ? new Date(reportData.submittedAt).toLocaleString(undefined, {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    : 'N/A'}
                 </span>
               </div>
-              
+
               <div className="bg-white rounded-lg p-3 shadow-sm border">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-bold text-gray-900">{reportData.progress}%</span>
@@ -231,24 +412,44 @@ const TeamProgress: React.FC = () => {
                     )}
                   </div>
                 </div>
-                
+
                 <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
                   <div
                     className={`h-2 rounded-full transition-all duration-500 ${
-                      reportData.progress >= 90 ? 'bg-gradient-to-r from-green-400 to-green-600' :
-                      reportData.progress >= 80 ? 'bg-gradient-to-r from-blue-400 to-blue-600' :
-                      reportData.progress >= 70 ? 'bg-gradient-to-r from-yellow-400 to-yellow-600' :
-                      reportData.progress >= 60 ? 'bg-gradient-to-r from-orange-400 to-orange-600' :
-                      'bg-gradient-to-r from-red-400 to-red-600'
+                      reportData.progress >= 90
+                        ? 'bg-gradient-to-r from-green-400 to-green-600'
+                        : reportData.progress >= 80
+                        ? 'bg-gradient-to-r from-blue-400 to-blue-600'
+                        : reportData.progress >= 70
+                        ? 'bg-gradient-to-r from-yellow-400 to-yellow-600'
+                        : reportData.progress >= 60
+                        ? 'bg-gradient-to-r from-orange-400 to-orange-600'
+                        : 'bg-gradient-to-r from-red-400 to-red-600'
                     }`}
                     style={{ width: `${reportData.progress}%` }}
                   />
                 </div>
-                
-                <div className="text-xs text-gray-600 mb-2">
-                  {reportData.tasks} tasks • {reportData.approved ? 'Approved' : 'Pending'}
-                </div>
-                
+<div className="text-xs text-gray-600 mb-2">
+  {reportData.tasks || 0} tasks •{" "}
+  <span
+    className={`px-2 py-0.5 rounded font-semibold ${
+      reportData.status === "approved"
+        ? "bg-green-100 text-green-800"
+        : reportData.status === "rejected"
+        ? "bg-red-100 text-red-800"
+        : "bg-yellow-100 text-yellow-800"
+    }`}
+  >
+    {reportData.status === "approved"
+      ? "Approved"
+      : reportData.status === "rejected"
+      ? "Rejected"
+      : "Under Review"}
+  </span>
+</div>
+
+
+
                 {reportData.managerFeedback && (
                   <div className="bg-blue-50 rounded p-2 mb-2">
                     <div className="flex items-center space-x-1 mb-1">
@@ -259,7 +460,7 @@ const TeamProgress: React.FC = () => {
                   </div>
                 )}
               </div>
-              
+
               <div className="bg-gradient-to-r from-blue-500 to-purple-500 text-white text-xs font-bold px-3 py-2 rounded-lg text-center shadow-md hover:shadow-lg transition-shadow flex items-center justify-center space-x-1">
                 <Eye className="w-3 h-3" />
                 <span>View Details</span>
@@ -267,41 +468,6 @@ const TeamProgress: React.FC = () => {
             </div>
           )}
 
-          {/* Show team member names when viewing "My Progress" */}
-          {isCurrentUser && allReportsForDate.length > 0 && (
-            <div className="mt-2 space-y-1">
-              <div className="text-xs font-medium text-gray-700 mb-1">Team Reports:</div>
-              {allReportsForDate.slice(0, 3).map(report => {
-                const teamMember = displayTeamMembers.find(m => m.id === report.userId);
-                if (!teamMember) return null;
-                
-                return (
-                  <div key={report.userId} className="flex items-center space-x-2 bg-white/80 rounded-md p-1">
-                    <img
-                      src={teamMember.avatar}
-                      alt={teamMember.name}
-                      className="w-4 h-4 rounded-full object-cover"
-                    />
-                    <span className="text-xs text-gray-700 font-medium truncate">
-                      {teamMember.name.split(' ')[0]}
-                    </span>
-                    {report.submitted && (
-                      <div className="flex items-center space-x-1">
-                        <CheckCircle className="w-3 h-3 text-green-500" />
-                        <span className="text-xs text-green-600 font-bold">{report.progress}%</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              {allReportsForDate.length > 3 && (
-                <div className="text-xs text-gray-500 text-center">
-                  +{allReportsForDate.length - 3} more
-                </div>
-              )}
-            </div>
-          )}
-          
           {isToday && !reportData?.submitted && isCurrentUser && (
             <div className="mt-2">
               <div className="bg-gradient-to-r from-blue-500 to-purple-500 text-white text-xs font-bold px-3 py-2 rounded-lg text-center shadow-md hover:shadow-lg transition-shadow animate-pulse">
@@ -309,8 +475,8 @@ const TeamProgress: React.FC = () => {
               </div>
             </div>
           )}
-          
-          {isPast && !reportData?.submitted && (
+
+          {isPast && !reportData?.submitted && isCurrentUser && (
             <div className="mt-2">
               <div className="bg-red-100 border border-red-300 text-red-700 text-xs font-medium px-2 py-1 rounded-lg text-center">
                 ❌ Missing Report
@@ -338,10 +504,9 @@ const TeamProgress: React.FC = () => {
         }
       }
     };
-    
+
     return (
       <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
-        {/* Calendar Header */}
         <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-600 p-6 text-white">
           <div className="flex items-center justify-between mb-4">
             <button
@@ -350,12 +515,17 @@ const TeamProgress: React.FC = () => {
             >
               <ChevronLeft className="w-6 h-6" />
             </button>
+
             <div className="text-center">
               <h2 className="text-2xl font-bold">
-                {new Date(currentYear, currentMonth).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                {new Date(currentYear, currentMonth).toLocaleDateString('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                })}
               </h2>
               <p className="text-blue-100 mt-1">Team Progress Reports Calendar</p>
             </div>
+
             <button
               onClick={() => navigateMonth('next')}
               className="p-2 hover:bg-white/20 rounded-lg transition-colors"
@@ -364,29 +534,33 @@ const TeamProgress: React.FC = () => {
             </button>
           </div>
 
-          {/* User Selection for Managers/Team Leads */}
-          <div className="flex items-center justify-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <Users className="w-5 h-5" />
-              <span className="font-medium">Viewing:</span>
+          {canViewTeam && (
+            <div className="flex items-center justify-center space-x-4 mb-4">
+              <div className="flex items-center space-x-2">
+                <Users className="w-5 h-5 text-white" />
+                <span className="font-medium text-white">Viewing:</span>
+              </div>
+
+              <select
+                value={selectedUser}
+                onChange={(e) => {
+                  const selectedId = e.target.value;
+                  console.log('Selected user ID:', selectedId);
+                  setSelectedUser(selectedId);
+                }}
+                className="bg-white/20 border border-white/30 rounded-lg px-4 py-2 text-white placeholder-white/70 focus:bg-white/30 focus:outline-none min-w-[200px]"
+              >
+                {availableUsers.map((user) => (
+                  <option key={user.id} value={user.id} className="text-gray-900">
+                    {user.name} {user.isCurrentUser ? '(You)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-            <select
-              value={selectedUser}
-              onChange={(e) => setSelectedUser(e.target.value)}
-              className="bg-white/20 border border-white/30 rounded-lg px-4 py-2 text-white placeholder-white/70 focus:bg-white/30 focus:outline-none"
-            >
-              {availableUsers.map(user => (
-                <option key={user.id} value={user.id} className="text-gray-900">
-                  {user.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          )}
         </div>
-        
-        {/* Calendar Grid */}
+
         <div className="p-6">
-          {/* Day Headers */}
           <div className="grid grid-cols-7 gap-2 mb-4">
             {['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => (
               <div key={day} className="p-3 text-center text-sm font-bold text-gray-700 bg-gradient-to-r from-gray-100 to-gray-200 rounded-lg">
@@ -394,90 +568,80 @@ const TeamProgress: React.FC = () => {
               </div>
             ))}
           </div>
-          
-          {/* Calendar Days */}
+
           <div className="grid grid-cols-7 gap-3">
             {days}
-          </div>
-          
-          {/* Enhanced Legend */}
-          <div className="mt-8 bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Calendar Legend</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mb-4">
-              <div className="flex items-center space-x-3">
-                <div className="w-6 h-6 bg-gradient-to-br from-blue-100 via-blue-200 to-purple-200 border border-blue-500 rounded-lg"></div>
-                <span className="text-gray-700 font-medium">Today - Submit Report</span>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-6 h-6 bg-gradient-to-br from-green-50 via-green-100 to-emerald-100 border border-green-300 rounded-lg"></div>
-                <span className="text-gray-700 font-medium">Report Submitted</span>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-6 h-6 bg-gradient-to-br from-red-50 via-red-100 to-pink-100 border border-red-300 rounded-lg"></div>
-                <span className="text-gray-700 font-medium">Missing Report</span>
-              </div>
-              <div className="flex items-center space-x-3">
-                <div className="w-6 h-6 bg-gray-50 border border-gray-200 rounded-lg opacity-60"></div>
-                <span className="text-gray-700 font-medium">Future Date</span>
-              </div>
-            </div>
-            
-            {selectedUser === user.id && (
-              <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
-                <h4 className="font-medium text-blue-900 mb-2 flex items-center space-x-2">
-                  <Users className="w-4 h-4" />
-                  <span>Team Progress View</span>
-                </h4>
-                <p className="text-sm text-blue-800">
-                  When viewing "My Progress", each calendar day shows your team members who have submitted reports. 
-                  Team member names and progress percentages are displayed for easy tracking.
-                </p>
-              </div>
-            )}
-            
-            <div className="mt-4 pt-4 border-t border-gray-200">
-              <h4 className="font-medium text-gray-900 mb-2">Progress Indicators:</h4>
-              <div className="flex items-center space-x-6 text-xs">
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-2 bg-gradient-to-r from-green-400 to-green-600 rounded"></div>
-                  <span>90-100%</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-2 bg-gradient-to-r from-blue-400 to-blue-600 rounded"></div>
-                  <span>80-89%</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-2 bg-gradient-to-r from-yellow-400 to-yellow-600 rounded"></div>
-                  <span>70-79%</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-2 bg-gradient-to-r from-orange-400 to-orange-600 rounded"></div>
-                  <span>60-69%</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-4 h-2 bg-gradient-to-r from-red-400 to-red-600 rounded"></div>
-                  <span>Below 60%</span>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
     );
   };
 
-  const SubmitProgressForm = () => {
-    const [formData, setFormData] = useState({
-      progress: 75,
-      accomplishments: '',
-      challenges: '',
-      tomorrowPlan: ''
-    });
+  // Submit Progress Form Component
+  const SubmitProgressForm: React.FC<any> = () => {
+    const handleSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      try {
+        const token = localStorage.getItem('token');
+
+        await axios.post(
+          'http://localhost:8000/api/manager/progress-reports',
+          {
+            report_date: selectedDate,
+            progress_percent: formData.progress,
+            accomplishments: formData.accomplishments,
+            challenges: formData.challenges,
+            tomorrow_plan: formData.tomorrowPlan,
+            task_completed: formData.tasks,
+          },
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        // Refresh reports
+        const response = await axios.get(
+          'http://localhost:8000/api/manager/progress-reports',
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+
+        const normalizedReports = response.data.map((report: any) => ({
+          ...report,
+          userId: report.user_id,
+          date: report.report_date?.split('T')[0] || report.created_at?.split('T')[0] || report.date,
+          submitted: true,
+          submittedAt: report.created_at,
+          progress: report.progress_percent || 0,
+          accomplishments: report.accomplishments || '',
+          challenges: report.challenges || '',
+          tomorrowPlan: report.tomorrow_plan || '',
+          tasks: report.taskCount || 0,
+          taskDetails: report.tasks || [],
+          approved: report.approved || false,
+          managerFeedback: report.manager_feedback || '',
+        }));
+
+        setReports(normalizedReports);
+        setFormData({
+          progress: 0,
+          accomplishments: '',
+          challenges: '',
+          tomorrowPlan: '',
+          tasks: [],
+        });
+        setShowSubmitForm(false);
+        alert('Report submitted successfully!');
+      } catch (error) {
+        console.error('Error submitting report:', error);
+        setError('Failed to submit report. Please try again.');
+      }
+    };
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-          {/* Form Header */}
           <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6 text-white">
             <div className="flex items-center justify-between">
               <div>
@@ -492,8 +656,30 @@ const TeamProgress: React.FC = () => {
               </button>
             </div>
           </div>
-          
-          <form className="p-6 space-y-6">
+
+          <div className="p-6 pt-4">
+            <label className="block text-sm font-bold text-gray-900 mb-2">Tasks Completed</label>
+            <Select
+              isMulti
+              options={availableTasks}
+              value={availableTasks.filter((task: TaskOption) => formData.tasks.includes(task.value))}
+              onChange={(selectedOptions: MultiValue<TaskOption>) =>
+                setFormData(prev => ({
+                  ...prev,
+                  tasks: selectedOptions.map(option => option.value),
+                }))
+              }
+              className="w-full"
+              placeholder="Select tasks..."
+              isClearable={false}
+              isSearchable
+              getOptionLabel={e => e.label}
+              getOptionValue={(e) => e.value.toString()}
+              isOptionDisabled={option => option.isDisabled === true}
+            />
+          </div>
+
+          <form onSubmit={handleSubmit} className="p-6 space-y-6 pt-0">
             <div>
               <label className="block text-sm font-bold text-gray-900 mb-3">Overall Progress (%)</label>
               <div className="relative">
@@ -501,9 +687,15 @@ const TeamProgress: React.FC = () => {
                   type="range"
                   min="0"
                   max="100"
+                  step="1"
                   value={formData.progress}
-                  onChange={(e) => setFormData(prev => ({ ...prev, progress: parseInt(e.target.value) }))}
-                  className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      progress: parseInt(e.target.value),
+                    }))
+                  }
+                  className="w-full cursor-pointer"
                 />
                 <div className="flex justify-between text-sm text-gray-500 mt-2">
                   <span>0%</span>
@@ -524,41 +716,48 @@ const TeamProgress: React.FC = () => {
                 />
               </div>
             </div>
-            
+
             <div>
-              <label className="block text-sm font-bold text-gray-900 mb-2">Key Accomplishments *</label>
+              <label className="block text-sm font-bold text-gray-900 mb-2">
+                Key Accomplishments *
+              </label>
               <textarea
                 value={formData.accomplishments}
-                onChange={(e) => setFormData(prev => ({ ...prev, accomplishments: e.target.value }))}
-                rows={4}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    accomplishments: e.target.value,
+                  }))
+                }
+                rows={3}
                 className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                 placeholder="Describe your key accomplishments for today..."
                 required
               />
             </div>
-            
+
             <div>
               <label className="block text-sm font-bold text-gray-900 mb-2">Challenges Faced</label>
               <textarea
                 value={formData.challenges}
-                onChange={(e) => setFormData(prev => ({ ...prev, challenges: e.target.value }))}
+                onChange={e => setFormData(prev => ({ ...prev, challenges: e.target.value }))}
                 rows={3}
                 className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                 placeholder="Any challenges or blockers encountered..."
               />
             </div>
-            
+
             <div>
               <label className="block text-sm font-bold text-gray-900 mb-2">Tomorrow's Plan</label>
               <textarea
                 value={formData.tomorrowPlan}
-                onChange={(e) => setFormData(prev => ({ ...prev, tomorrowPlan: e.target.value }))}
+                onChange={e => setFormData(prev => ({ ...prev, tomorrowPlan: e.target.value }))}
                 rows={3}
                 className="w-full border-2 border-gray-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
                 placeholder="What do you plan to work on tomorrow..."
               />
             </div>
-            
+
             <div className="flex space-x-3 pt-4">
               <button
                 type="submit"
@@ -581,15 +780,19 @@ const TeamProgress: React.FC = () => {
     );
   };
 
-  const ViewReportModal = () => {
+  // View Report Modal Component
+  const ViewReportModal: React.FC<any> = () => {
     if (!viewingReport) return null;
 
-    const reportUser = availableUsers.find(u => u.id === viewingReport.userId);
+    const isManagerOrDirector = userAccessLevel === 'manager' || userAccessLevel === 'director';
+const isNotSelf = selectedUser !== user.id;
+
+const canApprove = isManagerOrDirector && isNotSelf;
+
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
-          {/* Modal Header */}
           <div className="bg-gradient-to-r from-green-500 to-emerald-600 p-6 text-white">
             <div className="flex items-center justify-between">
               <div>
@@ -598,7 +801,7 @@ const TeamProgress: React.FC = () => {
                   {reportUser?.name} - {formatDate(viewingReport.date)}
                 </p>
                 <p className="text-green-100 text-sm">
-                  Submitted: {new Date(viewingReport.submittedAt).toLocaleString()}
+                  Submitted: {viewingReport.submittedAt ? new Date(viewingReport.submittedAt).toLocaleString() : 'N/A'}
                 </p>
               </div>
               <button
@@ -611,22 +814,27 @@ const TeamProgress: React.FC = () => {
           </div>
           
           <div className="p-6 space-y-6">
-            {/* Progress Overview */}
             <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-200">
               <div className="flex items-center justify-between mb-4">
                 <h4 className="text-lg font-bold text-gray-900">Progress Overview</h4>
                 <div className="flex items-center space-x-2">
-                  {viewingReport.approved ? (
-                    <div className="flex items-center space-x-1 bg-green-100 text-green-800 px-3 py-1 rounded-full">
-                      <CheckCircle className="w-4 h-4" />
-                      <span className="text-sm font-medium">Approved</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center space-x-1 bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full">
-                      <Clock className="w-4 h-4" />
-                      <span className="text-sm font-medium">Under Review</span>
-                    </div>
-                  )}
+                 {viewingReport.status === 'approved' ? (
+  <div className="flex items-center space-x-1 bg-green-100 text-green-800 px-3 py-1 rounded-full">
+    <CheckCircle className="w-4 h-4" />
+    <span className="text-sm font-bold">Approved</span>
+  </div>
+) : viewingReport.status === 'rejected' ? (
+  <div className="flex items-center space-x-1 bg-red-100 text-red-800 px-3 py-1 rounded-full">
+    <XCircle className="w-4 h-4" />
+    <span className="text-sm font-bold">Rejected</span>
+  </div>
+) : (
+  <div className="flex items-center space-x-1 bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full">
+    <Clock className="w-4 h-4" />
+    <span className="text-sm font-bold">Under Review</span>
+  </div>
+)}
+
                 </div>
               </div>
               
@@ -654,17 +862,27 @@ const TeamProgress: React.FC = () => {
                   <p className="text-sm text-gray-600 mb-2">Tasks Completed</p>
                   <div className="flex items-center space-x-2">
                     <CheckCircle className="w-6 h-6 text-green-500" />
-                    <span className="text-2xl font-bold text-gray-900">{viewingReport.tasks}</span>
-                    <span className="text-sm text-gray-600">tasks</span>
                   </div>
+                  <p className="text-2xl font-bold text-gray-900 mb-2">
+                    {Array.isArray(viewingReport.taskDetails) ? viewingReport.taskDetails.length : 0} Tasks
+                  </p>
+
+                  {Array.isArray(viewingReport.taskDetails) && viewingReport.taskDetails.length > 0 ? (
+                    <ul className="space-y-1 list-disc list-inside text-gray-700 text-sm">
+                      {viewingReport.taskDetails.map((title: string, idx: number) => (
+                        <li key={idx}>{title}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-gray-500">No tasks completed</p>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Accomplishments */}
             <div className="bg-white border border-gray-200 rounded-xl p-6">
               <h4 className="text-lg font-bold text-gray-900 mb-4 flex items-center space-x-2">
-                <Target className="w-5 h-5 text-green-600" />
+                <Award className="w-5 h-5 text-green-600" />
                 <span>Key Accomplishments</span>
               </h4>
               <div className="bg-green-50 rounded-lg p-4 border-l-4 border-green-500">
@@ -674,7 +892,6 @@ const TeamProgress: React.FC = () => {
               </div>
             </div>
 
-            {/* Challenges */}
             <div className="bg-white border border-gray-200 rounded-xl p-6">
               <h4 className="text-lg font-bold text-gray-900 mb-4 flex items-center space-x-2">
                 <Clock className="w-5 h-5 text-orange-600" />
@@ -687,7 +904,6 @@ const TeamProgress: React.FC = () => {
               </div>
             </div>
 
-            {/* Tomorrow's Plan */}
             <div className="bg-white border border-gray-200 rounded-xl p-6">
               <h4 className="text-lg font-bold text-gray-900 mb-4 flex items-center space-x-2">
                 <Calendar className="w-5 h-5 text-blue-600" />
@@ -699,57 +915,58 @@ const TeamProgress: React.FC = () => {
                 </p>
               </div>
             </div>
+{canApprove && viewingReport?.status === 'pending' && (
+  <div className="bg-white border border-gray-200 rounded-xl p-6">
+    <h4 className="text-lg font-bold text-gray-900 mb-4 flex items-center space-x-2">
+      <MessageSquare className="w-5 h-5 text-indigo-600" />
+      <span>Manager Review</span>
+    </h4>
 
-            {/* Manager Feedback */}
+    <textarea
+      className="w-full border border-gray-300 rounded-lg p-3 text-sm text-gray-700 focus:outline-none focus:ring focus:ring-indigo-200"
+      rows={4}
+      placeholder="Write your feedback here..."
+      value={feedback}
+      onChange={(e) => setFeedback(e.target.value)}
+    />
+
+    <div className="flex items-center space-x-4 mt-4">
+      <button
+        onClick={() => handleApproval(true)}
+        disabled={isSubmitting}
+        className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-xl font-semibold transition-colors flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <ThumbsUp className="w-4 h-4" />
+        <span>{isSubmitting ? 'Approving...' : 'Approve'}</span>
+      </button>
+
+      <button
+        onClick={() => handleApproval(false)}
+        disabled={isSubmitting}
+        className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-xl font-semibold transition-colors flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <ThumbsDown className="w-4 h-4" />
+        <span>{isSubmitting ? 'Rejecting...' : 'Reject'}</span>
+      </button>
+    </div>
+  </div>
+)}
+
             {viewingReport.managerFeedback && (
-              <div className="bg-white border border-gray-200 rounded-xl p-6">
-                <h4 className="text-lg font-bold text-gray-900 mb-4 flex items-center space-x-2">
-                  <MessageSquare className="w-5 h-5 text-purple-600" />
-                  <span>Manager Feedback</span>
-                </h4>
-                <div className="bg-purple-50 rounded-lg p-4 border-l-4 border-purple-500">
-                  <p className="text-gray-700 leading-relaxed">{viewingReport.managerFeedback}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Report Metadata */}
-            <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-600">Submission Date:</span>
-                  <span className="ml-2 font-medium text-gray-900">{formatDate(viewingReport.date)}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Status:</span>
-                  <span className={`ml-2 font-medium ${viewingReport.approved ? 'text-green-600' : 'text-yellow-600'}`}>
-                    {viewingReport.approved ? 'Approved' : 'Under Review'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Submitted At:</span>
-                  <span className="ml-2 font-medium text-gray-900">
-                    {new Date(viewingReport.submittedAt).toLocaleTimeString()}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Progress Level:</span>
-                  <span className={`ml-2 font-medium ${
-                    viewingReport.progress >= 90 ? 'text-green-600' :
-                    viewingReport.progress >= 80 ? 'text-blue-600' :
-                    viewingReport.progress >= 70 ? 'text-yellow-600' :
-                    'text-orange-600'
-                  }`}>
-                    {viewingReport.progress >= 90 ? 'Excellent' :
-                     viewingReport.progress >= 80 ? 'Good' :
-                     viewingReport.progress >= 70 ? 'Satisfactory' : 'Needs Improvement'}
-                  </span>
-                </div>
-              </div>
-            </div>
+  <div className="bg-white border border-gray-200 rounded-xl p-6">
+    <h4 className="text-lg font-bold text-gray-900 mb-4 flex items-center space-x-2">
+      <MessageSquare className="w-5 h-5 text-purple-600" />
+      <span>Manager Feedback</span>
+    </h4>
+    <div className="bg-purple-50 rounded-lg p-4 border-l-4 border-purple-500">
+      <p className="text-gray-700 leading-relaxed">{viewingReport.managerFeedback}</p>
+    </div>
+  </div>
+)}
           </div>
 
-          {/* Modal Footer */}
+          {/* Close button */}
+
           <div className="p-6 border-t border-gray-200 bg-gray-50">
             <button
               onClick={() => setShowViewReport(false)}
@@ -765,17 +982,33 @@ const TeamProgress: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      {/* Header */}
       <div className="text-center">
+        {selectedUser !== user.id && (
+          <div className="mb-4">
+            <div className="inline-flex items-center space-x-2 bg-blue-100 text-blue-800 px-4 py-2 rounded-full">
+              <Users className="w-4 h-4" />
+              <span className="font-medium">
+                Viewing: {availableUsers.find(u => u.id === selectedUser)?.name}
+              </span>
+            </div>
+          </div>
+        )}
         <h1 className="text-4xl font-bold bg-gradient-to-r from-gray-900 via-blue-900 to-purple-900 bg-clip-text text-transparent">
-          Team Progress Reports Calendar
+          {selectedUser !== user.id 
+            ? `${availableUsers.find(u => u.id === selectedUser)?.name}'s Progress Reports`
+            : userAccessLevel === 'director' ? 'Director Dashboard - Progress Reports' :
+              userAccessLevel === 'manager' ? 'Manager Dashboard - Team Progress' :
+              'My Progress Reports'}
         </h1>
         <p className="text-gray-600 mt-2 text-lg">
-          {isMgr ? 'Monitor daily progress across your team' : 'Track team progress and submissions'}
+          {selectedUser !== user.id 
+            ? `Individual progress tracking for ${availableUsers.find(u => u.id === selectedUser)?.name}`
+            : userAccessLevel === 'director' ? 'Monitor progress across all managers and teams' :
+              userAccessLevel === 'manager' ? 'Monitor daily progress across your team' :
+              'Track your daily progress and submissions'}
         </p>
       </div>
 
-      {/* Enhanced Summary Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl p-6 text-white">
           <div className="flex items-center justify-between">
@@ -806,7 +1039,7 @@ const TeamProgress: React.FC = () => {
         <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-orange-100">Pending</p>
+              <p className="text-orange-100">Pending Review</p>
               <p className="text-3xl font-bold mt-2">
                 {userReports.filter(r => r.submitted && !r.approved).length}
               </p>
@@ -821,12 +1054,15 @@ const TeamProgress: React.FC = () => {
             <div>
               <p className="text-purple-100">Avg Progress</p>
               <p className="text-3xl font-bold mt-2">
-                {Math.round(
-                  userReports
-                    .filter(r => r.submitted)
-                    .reduce((sum, r) => sum + r.progress, 0) / 
-                  userReports.filter(r => r.submitted).length || 0
-                )}%
+                {userReports.filter(r => r.submitted).length > 0
+                  ? Math.round(
+                      userReports
+                        .filter(r => r.submitted)
+                        .reduce((sum, r) => sum + r.progress, 0) /
+                      userReports.filter(r => r.submitted).length
+                    )
+                  : 0
+                }%
               </p>
               <p className="text-purple-100 text-sm">This Month</p>
             </div>
@@ -835,14 +1071,10 @@ const TeamProgress: React.FC = () => {
         </div>
       </div>
 
-      {/* Calendar */}
       <CalendarView />
 
-      {/* Submit Form Modal */}
       {showSubmitForm && <SubmitProgressForm />}
-
-      {/* View Report Modal */}
-      {showViewReport && <ViewReportModal />}
+      {showViewReport && viewingReport && <ViewReportModal />}
     </div>
   );
 };
