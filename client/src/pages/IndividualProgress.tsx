@@ -31,6 +31,14 @@ ChartJS.register(
   ArcElement,
   RadialLinearScale
 );
+interface Task {
+  id: string;
+  title: string;
+  status: string;
+  due_date: string;
+  user_id: string;
+   progressPct?: number; 
+}
 
 const IndividualProgress: React.FC = () => {
   const user = getCurrentUser();
@@ -41,7 +49,7 @@ const IndividualProgress: React.FC = () => {
   const [managers, setManagers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const isDir = isDirector(user.role);
+  const isDir = user ? isDirector(user.role) : false;
 
   useEffect(() => {
     const fetchManagers = async () => {
@@ -81,16 +89,18 @@ const IndividualProgress: React.FC = () => {
     const userReports = managers.find(u => u.id === userId)?.progressReports || [];
     const userAttendance = managers.find(u => u.id === userId)?.attendance || [];
     
-    const completedTasks = userTasks.filter(t => t.status === 'completed').length;
+   const completedTasks = userTasks.filter((t: Task) => t.status === 'completed').length;
+    
     const totalTasks = userTasks.length;
     const completionRate = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
     
-    const avgProgress = userTasks.length > 0 
-      ? userTasks.reduce((sum, task) => sum + (task.progressPct || 0), 0) / userTasks.length 
-      : 0;
+    const avgProgress = userTasks.length > 0
+  ? userTasks.reduce((sum: number, task: Task) => sum + (task.progressPct || 0), 0) / userTasks.length
+  : 0;
+
     
     const attendanceRate = userAttendance.length > 0
-      ? (userAttendance.filter(a => a.status === 'present' || a.status === 'late').length / userAttendance.length) * 100
+      ? (userAttendance.filter((a: { status: string; }) => a.status === 'present' || a.status === 'late').length / userAttendance.length) * 100
       : 0;
     
     const recentReports = userReports.slice(-5);
@@ -249,8 +259,9 @@ const IndividualProgress: React.FC = () => {
         pointLabels: {
           font: {
             size: 12,
-            weight: 'bold'
-          }
+           weight: 'bold' as 'bold', // ✅ cast to exact allowed value
+        } as any,// Allowed value: "bold"
+          
         }
       },
     },
