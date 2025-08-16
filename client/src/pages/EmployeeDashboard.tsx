@@ -18,9 +18,7 @@ import {
   isOverdue,
   formatDate,
   toDateObject,
-  isToday,
-  isYesterday,
-  isTomorrow,
+  getCurrentDate
 } from "../utils/dateUtils";
 import { differenceInDays } from "date-fns"; // <-- correct source
 
@@ -67,46 +65,96 @@ const EmployeeDashboard: React.FC = () => {
   const [showProgressForm, setShowProgressForm] = useState(false);
   const [isPunchedIn, setIsPunchedIn] = useState(false);
   const [punchInTime, setPunchInTime] = useState("");
-  const today = new Date().toISOString().split("T")[0]; // "YYYY-MM-DD"
+  
+  
+  const [progress, setProgress] = useState<any[]>([]);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const token = localStorage.getItem("token");
-        if (!token || !authUser?.id) throw new Error("User not authenticated");
+useEffect(() => {
+  const fetchData = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token || !authUser?.id) throw new Error("User not authenticated");
 
-        const headers = {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        };
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      };
 
-        // Do NOT use `const leaveRes = await fetch(...)` inside Promise.all
-        const [userRes, tasksRes, leaveRes] = await Promise.all([
-          fetch(`http://localhost:8000/api/employee/profile`, { headers }),
-          fetch(`http://localhost:8000/api/employee/tasks`, { headers }),
-          fetch(`http://localhost:8000/api/employee/leaves`, { headers }),
-        ]);
+      // Fetch all required data in parallel
+      const [userRes, tasksRes, leaveRes, progressRes] = await Promise.all([
+        fetch(`http://localhost:8000/api/employee/profile`, { headers }),
+        fetch(`http://localhost:8000/api/employee/tasks`, { headers }),
+        fetch(`http://localhost:8000/api/employee/leaves`, { headers }),
+        fetch(`http://localhost:8000/api/employee/progress`, { headers }),
+      ]);
 
-        if (!userRes.ok || !tasksRes.ok || !leaveRes.ok) {
-          throw new Error("Failed to fetch data");
-        }
-
-        const [userData, tasks, leaveRequests] = await Promise.all([
-          safeJson(userRes),
-          safeJson(tasksRes),
-          safeJson(leaveRes),
-        ]);
-
-        setCurrentUser(userData);
-        setMyTasks(tasks);
-        setMyLeaveRequests(leaveRequests);
-      } catch (err: any) {
-        console.error("❌ Error fetching employee data:", err.message || err);
+      if (!userRes.ok || !tasksRes.ok || !leaveRes.ok || !progressRes.ok) {
+        throw new Error("Failed to fetch one or more endpoints");
       }
-    };
 
-    fetchData();
-  }, [authUser?.id]);
+      // Parse JSON responses
+      const [userData, tasks, leaveRequests, progressData] = await Promise.all([
+        safeJson(userRes),
+        safeJson(tasksRes),
+        safeJson(leaveRes),
+        safeJson(progressRes),
+      ]);
+
+      // 🔄 Add progress percentage to each task
+      const enrichedTasks = tasks.map((task: any) => {
+        const taskProgress = progressData.find((p: any) => p.task_id === task.id);
+        return {
+          ...task,
+          progressPct: taskProgress?.progress_percent ?? 0,
+        };
+      });
+
+      // 🟡 Normalize and compute derived leave status
+      const enrichedLeaves = leaveRequests.map((leave: any) => {
+  let status = leave.status; // ← use backend status as base
+
+  // Optional fallback logic only if status is missing/null
+  if (!status || status === "pending") {
+    if (
+      leave.manager_approval === "approved" ||
+      leave.director_approval === "approved"
+    ) {
+      status = "approved";
+    } else if (
+      leave.manager_approval === "rejected" ||
+      leave.director_approval === "rejected"
+    ) {
+      status = "rejected";
+    } else {
+      status = "pending";
+    }
+  }
+
+  return {
+    ...leave,
+    status,
+  };
+});
+console.log("✅ Final Enriched leaveRequests:", enrichedLeaves);
+
+console.log("⏺️ Raw leaveRequests from backend", leaveRequests);
+      
+
+
+      // ✅ Update state
+      setCurrentUser(userData);
+      setMyTasks(enrichedTasks);
+      setMyLeaveRequests(enrichedLeaves);
+      setProgress(progressData);
+    } catch (err: any) {
+      console.error("❌ Error fetching employee data:", err.message || err);
+    }
+  };
+
+  fetchData();
+}, [authUser?.id]);
+
+
 
   const LEAVE_QUOTA = 20;
 
@@ -136,11 +184,13 @@ const EmployeeDashboard: React.FC = () => {
       t.status &&
       isOverdue(t.dueDate) &&
       t.status.toLowerCase() !== "completed"
+      
   );
 
   const getDaysUntilDeadline = (dueDate: string) => {
     const today = new Date();
     const deadline = toDateObject(dueDate);
+    if (!deadline) return 0; // or handle as appropriate
     return differenceInDays(deadline, today);
   };
   interface LeaveRequestFormProps {
@@ -189,6 +239,7 @@ const EmployeeDashboard: React.FC = () => {
 
     const handleLeaveSubmission = async () => {
       try {
+        if (!user || !user.role) throw new Error("Unauthorized");
         const role = user.role.toLowerCase();
         const token = localStorage.getItem("token");
         if (!token || !user?.id) throw new Error("Unauthorized");
@@ -362,230 +413,293 @@ const EmployeeDashboard: React.FC = () => {
     );
   };
   interface ProgressReportFormProps {
-    onClose: () => void;
-    myTasks: Task[]; // <-- add this
-  }
+  onClose: () => void;
+  myTasks: Task[];
+  user: { role: string }; // ✅ required for URL
+  setTasks: React.Dispatch<React.SetStateAction<Task[]>>; // ✅ to update local task list
+}
 
-  const ProgressReportForm: React.FC<ProgressReportFormProps> = ({
-    onClose,
-  }) => {
-    const [selectedTask, setSelectedTask] = useState("");
+const ProgressReportForm: React.FC<ProgressReportFormProps> = ({
+  onClose,
+  myTasks, // ✅ this is your task list
+  user,
+  setTasks, // ✅ use this to update parent state
+}) => {
+  const [selectedTask, setSelectedTask] = useState("");
+  const [status, setStatus] = useState("select");
+  const [progressPct, setProgressPct] = useState(50);
+  const [progressDetails, setProgressDetails] = useState("");
+  const [loading, setLoading] = useState(false);
+// const [showProgressForm, setShowProgressForm] = useState(false);
+  
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
 
-    const [progressPct, setProgressPct] = useState(50);
-    const [progressDetails, setProgressDetails] = useState("");
-    const [loading, setLoading] = useState(false);
-
-    const handleSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
-
-      if (!selectedTask) {
-        alert("Please select a task");
-        return;
-      }
-
-      try {
-        setLoading(true);
-        const token = localStorage.getItem("token");
-        if (!token) throw new Error("Unauthorized");
-
-        const res = await fetch(
-          `http://localhost:8000/api/employee/tasks/${selectedTask}/progress`,
-          {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              progressPct,
-              progressDetails,
-            }),
-          }
-        );
-
-        if (!res.ok) throw new Error("Failed to submit progress");
-
-        console.log("✅ Progress submitted");
-        onClose();
-      } catch (err: any) {
-        console.error("❌ Progress submission error:", err.message || err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            Submit Progress Report
-          </h3>
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Select Task
-              </label>
-              <select
-                value={selectedTask}
-                onChange={(e) => setSelectedTask(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                required
-              >
-                <option value="">Choose a task...</option>
-                {myTasks.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Progress Percentage
-              </label>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={progressPct}
-                onChange={(e) => setProgressPct(Number(e.target.value))}
-                className="w-full"
-              />
-              <div className="text-sm text-gray-600 mt-1">{progressPct}%</div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Progress Details
-              </label>
-              <textarea
-                rows={4}
-                value={progressDetails}
-                onChange={(e) => setProgressDetails(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2"
-                placeholder="Describe what you've accomplished and any challenges faced..."
-                required
-              />
-            </div>
-
-            <div className="flex space-x-3 pt-4">
-              <button
-                type="submit"
-                disabled={loading}
-                className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
-              >
-                <Send className="w-4 h-4" />
-                <span>{loading ? "Submitting..." : "Submit Report"}</span>
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    );
-  };
-  useEffect(() => {
-    const storedPunchStatus = localStorage.getItem("isPunchedIn");
-    const storedPunchTime = localStorage.getItem("punchInTime");
-
-    if (storedPunchStatus === "true" && storedPunchTime) {
-      setIsPunchedIn(true);
-      setPunchInTime(storedPunchTime);
-    }
-  }, []);
-  const handlePunchToggle = async () => {
-    if (isPunchedIn) {
-      await handlePunchOut();
-    } else {
-      await handlePunchIn();
-    }
-  };
-  const handlePunchIn = async () => {
-    const currentTime = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    if (isPunchedIn) {
-      console.warn("Already punched in for today.");
+    if (!selectedTask) {
+      alert("Please select a task");
       return;
     }
 
-    try {
-      const token = localStorage.getItem("token");
-      if (!token) throw new Error("Unauthorized");
-
-      const res = await fetch(`http://localhost:8000/api/employee/attendance`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          punch_in: currentTime,
-          date: today,
-          status: "present",
-        }),
-      });
-
-      if (!res.ok) throw new Error("Failed to punch in");
-
-      setIsPunchedIn(true);
-      setPunchInTime(currentTime);
-
-      // Persist state
-      localStorage.setItem("isPunchedIn", "true");
-      localStorage.setItem("punchInTime", currentTime);
-
-      console.log("✅ Punched in at:", currentTime);
-    } catch (err: any) {
-      console.error("❌ Punch in error:", err.message || err);
+    const token = localStorage.getItem("token");
+    if (!token) {
+      alert("Unauthorized");
+      return;
     }
-  };
 
-  const handlePunchOut = async () => {
-    const currentTime = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const payload = {
+      task_id: selectedTask,
+      progress_percent: progressPct,
+      status: status,
+      comment: progressDetails,
+    };
 
     try {
-      const token = localStorage.getItem("token");
-      if (!token || !user?.id) throw new Error("Unauthorized");
+      setLoading(true);
+      console.log("📤 Sending progress update payload:", payload);
 
       const res = await fetch(
-        `http://localhost:8000/api/employee/attendance/${today}`,
+        `http://localhost:8000/api/${user.role}/update-task-progress`,
         {
-          method: "PUT",
+          method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ punch_out: currentTime }),
+          body: JSON.stringify(payload),
         }
       );
 
-      if (!res.ok) throw new Error("Failed to punch out");
+      const resBody = await res.json();
 
-      setIsPunchedIn(false);
-      setPunchInTime("");
+      if (!res.ok) {
+        console.error("❌ Server error:", resBody);
+        throw new Error(resBody?.error || "Failed to update progress");
+      }
 
-      // Clear localStorage
-      localStorage.removeItem("isPunchedIn");
-      localStorage.removeItem("punchInTime");
+      console.log("🟢 Progress updated successfully:", resBody);
 
-      console.log("✅ Punched out at:", currentTime);
+      // ✅ Update local task list
+      setTasks((prev) =>
+        prev.map((task) =>
+          task.id === selectedTask
+            ? {
+                ...task,
+                status: status,
+                progress_percent: progressPct,
+                comment: progressDetails,
+              }
+            : task
+        )
+      );
+
+      onClose();
     } catch (err: any) {
-      console.error("❌ Punch out error:", err.message || err);
+      console.error("❌ Submission error:", err.message);
+      alert("Failed to update progress: " + err.message);
+    } finally {
+      setLoading(false);
     }
   };
+
+
+    return (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+    <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">
+        Submit Progress Report
+      </h3>
+
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        {/* Select Task */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Select Task
+          </label>
+          <select
+  value={selectedTask}
+  onChange={(e) => setSelectedTask(e.target.value)}
+  className="w-full border border-gray-300 rounded-lg px-3 py-2"
+  required
+>
+  <option value="">Choose a task...</option>
+  {myTasks.map((task) => (
+    <option
+      key={task.id}
+      value={task.id}
+      disabled={task.status === "completed"} // ✅ Disable if task is completed
+    >
+      {task.title} {task.status === "completed" ? "(Completed)" : ""}
+    </option>
+  ))}
+</select>
+        </div>
+
+        {/* Progress Percentage */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Progress Percentage
+          </label>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={progressPct}
+            onChange={(e) => setProgressPct(Number(e.target.value))}
+            className="w-full"
+          />
+          <div className="text-sm text-gray-600 mt-1">{progressPct}%</div>
+        </div>
+
+        {/* Status */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Status
+          </label>
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2"
+            required
+          >
+            <option value="assigned">Assigned</option>
+            <option value="in_progress">In Progress</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+
+        {/* Comment */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Progress Details
+          </label>
+          <textarea
+            rows={4}
+            value={progressDetails}
+            onChange={(e) => setProgressDetails(e.target.value)}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2"
+            placeholder="Describe what you've accomplished and any challenges faced..."
+            required
+          />
+        </div>
+
+        {/* Buttons */}
+        <div className="flex space-x-3 pt-4">
+          <button
+            type="submit"
+            disabled={loading}
+            className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
+          >
+            <Send className="w-4 h-4" />
+            <span>{loading ? "Submitting..." : "Submit Report"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 bg-gray-300 text-gray-700 py-2 px-4 rounded-lg hover:bg-gray-400 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+);
+  }
+  useEffect(() => {
+  const storedPunchStatus = localStorage.getItem("isPunchedIn");
+  const storedPunchTime = localStorage.getItem("punchInTime");
+
+  if (storedPunchStatus === "true" && storedPunchTime) {
+    setIsPunchedIn(true);
+    setPunchInTime(storedPunchTime);
+  }
+}, []);
+
+const today = new Date().toISOString().split("T")[0]; // ✅ Define this once
+
+const handlePunchToggle = async () => {
+  if (isPunchedIn) {
+    await handlePunchOut();
+  } else {
+    await handlePunchIn();
+  }
+};
+
+const handlePunchIn = async () => {
+  const currentTime = new Date().toTimeString().slice(0, 5); // "HH:MM" in 24-hour format
+
+
+  if (isPunchedIn) {
+    console.warn("Already punched in for today.");
+    return;
+  }
+
+  try {
+    const token = localStorage.getItem("token");
+    if (!token) throw new Error("Unauthorized");
+
+    const res = await fetch(`http://localhost:8000/api/employee/attendance`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        punch_in: currentTime,
+        date: today, // ✅ Use properly formatted date
+        status: "present",
+      }),
+    });
+
+    if (!res.ok) throw new Error("Failed to punch in");
+
+    setIsPunchedIn(true);
+    setPunchInTime(currentTime);
+
+    localStorage.setItem("isPunchedIn", "true");
+    localStorage.setItem("punchInTime", currentTime);
+
+    console.log("✅ Punched in at:", currentTime);
+  } catch (err: any) {
+    console.error("❌ Punch in error:", err.message || err);
+  }
+};
+
+const handlePunchOut = async () => {
+  const currentTime = new Date().toTimeString().slice(0, 5); // "HH:MM" in 24-hour format
+
+
+  try {
+    const token = localStorage.getItem("token");
+    const user = getCurrentUser(); // ✅ Needed to resolve user?.id
+    if (!token || !user?.id) throw new Error("Unauthorized");
+
+    const res = await fetch(
+      `http://localhost:8000/api/employee/attendance/${today}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ punch_out: currentTime }),
+      }
+    );
+
+    if (!res.ok) throw new Error("Failed to punch out");
+
+    setIsPunchedIn(false);
+    setPunchInTime("");
+
+    localStorage.removeItem("isPunchedIn");
+    localStorage.removeItem("punchInTime");
+
+    console.log("✅ Punched out at:", currentTime);
+  } catch (err: any) {
+    console.error("❌ Punch out error:", err.message || err);
+  }
+};
+
 
   return (
     <div className="space-y-6">
@@ -747,19 +861,21 @@ const EmployeeDashboard: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex items-center space-x-3">
-                    <div className="w-16 bg-gray-200 rounded-full h-2">
-                      <div
-                        className="bg-blue-600 h-2 rounded-full"
-                        style={{ width: `${task.progressPct}%` }}
-                      />
-                    </div>
-                    <span className="text-sm text-gray-600">
-                      {task.progressPct}%
-                    </span>
-                    {overdue && (
-                      <AlertCircle className="w-4 h-4 text-red-500" />
-                    )}
-                  </div>
+  <div className="w-16 bg-gray-200 rounded-full h-2 overflow-hidden">
+    <div
+      className="bg-blue-600 h-2"
+      style={{ width: `${task.progressPct || 0}%` }}
+    />
+  </div>
+  <span className="text-sm text-gray-600">
+    {(task.progressPct ?? 0)}%
+  </span>
+  {overdue && (
+    <AlertCircle className="w-4 h-4 text-red-500">
+    <title>Overdue</title>
+  </AlertCircle>
+)}
+</div>
                 </div>
               );
             })}
@@ -794,40 +910,78 @@ const EmployeeDashboard: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-3">
-            {myLeaveRequests.slice(0, 3).map((request) => (
-              <div
-                key={request.id}
-                className="flex items-center justify-between p-3 border border-gray-200 rounded-lg"
-              >
-                <div>
-                  <h4 className="font-medium text-gray-900 capitalize">
-                    {request.leave_type?.replace("_", " ") || "Unknown"} Leave
-                  </h4>
-                  <p className="text-sm text-gray-600">
-                    {formatDate(request.start_date)} -{" "}
-                    {formatDate(request.end_date)} (
-                    {Math.ceil(
-                      (new Date(request.end_date).getTime() -
-                        new Date(request.start_date).getTime()) /
-                        (1000 * 3600 * 24)
-                    ) + 1}{" "}
-                    days)
-                  </p>
-                </div>
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    request.status === "approved"
-                      ? "bg-green-100 text-green-800"
-                      : request.status === "rejected"
-                      ? "bg-red-100 text-red-800"
-                      : "bg-yellow-100 text-yellow-800"
-                  }`}
-                >
-                  {request.status}
-                </span>
-              </div>
-            ))}
+  {myLeaveRequests.slice(0, 3).map((request) => {
+    const days =
+      Math.ceil(
+        (new Date(request.end_date).getTime() -
+          new Date(request.start_date).getTime()) /
+          (1000 * 3600 * 24)
+      ) + 1;
+
+    const status =
+      request.status === "approved"
+        ? "Approved"
+        : request.status === "rejected"
+        ? "Rejected"
+        : "Pending";
+
+    return (
+      <div
+        key={request.id}
+        className="p-3 border border-gray-200 rounded-lg bg-white"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="font-medium text-gray-900 capitalize">
+              {request.leave_type?.replace("_", " ") || "Unknown"} Leave
+            </h4>
+            <p className="text-sm text-gray-600">
+              {formatDate(request.start_date)} - {formatDate(request.end_date)} ({days} days)
+            </p>
           </div>
+
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-medium ${
+              status === "Approved"
+                ? "bg-green-100 text-green-800"
+                : status === "Rejected"
+                ? "bg-red-100 text-red-800"
+                : "bg-yellow-100 text-yellow-800"
+            }`}
+          >
+            {status}
+          </span>
+        </div>
+
+        {/* Show who approved it + comments if available */}
+        {(request.managerApproval === "approved" ||
+          request.directorApproval === "approved") && (
+          <div className="mt-2 bg-green-50 border border-green-200 rounded-lg p-2">
+            <p className="text-xs text-green-700 font-semibold">Approved By:</p>
+
+            {request.managerApproval === "approved" && (
+              <p className="text-sm text-gray-700">✅ Manager</p>
+            )}
+            {request.managerComment && (
+              <p className="text-gray-600 italic text-sm ml-4">
+                “{request.managerComment}”
+              </p>
+            )}
+
+            {request.directorApproval === "approved" && (
+              <p className="text-sm text-gray-700">✅ Director</p>
+            )}
+            {request.directorComment && (
+              <p className="text-gray-600 italic text-sm ml-4">
+                “{request.directorComment}”
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  })}
+</div>
         )}
       </div>
 
@@ -841,10 +995,13 @@ const EmployeeDashboard: React.FC = () => {
       )}
 
       {showProgressForm && (
-        <ProgressReportForm
-          onClose={() => setShowProgressForm(false)}
-          myTasks={myTasks}
-        />
+  <ProgressReportForm
+    onClose={() => setShowProgressForm(false)}
+    myTasks={myTasks}
+    user={{ role: user?.role ?? "" }}
+    setTasks={setMyTasks}
+  />
+
       )}
     </div>
   );
